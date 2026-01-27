@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#E6EAF2" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/css/styles.css" />
+  <title>Dziennik nastrojów</title>
+</head>
+
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="topbar-left">
+      <!-- puste miejsce, żeby centrowanie działało -->
+    </div>
+
+    <div class="topbar-center">
+      <span class="brand">Dziennik nastrojów</span>
+    </div>
+
+      <button id="logoutBtn" class="btn logout-btn" hidden>Wyloguj</button>
+    </div>
+  </div>
+</header>
+
+
+  <div id="offlineBanner" class="offline-banner" hidden>
+    Brak połączenia. Dostępne offline: podgląd danych lokalnych, kamera, geolokalizacja.
+  </div>
+
+  <main id="app" class="container" aria-live="polite"></main>
+
+  <!-- Supabase SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
