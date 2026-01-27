@@ -165,6 +165,11 @@ async function renderShell({ title, active, contentHtml }) {
 /* =========================
    PUBLIC: Landing / Auth
 ========================= */
+// Zwraca HTML z logo PNG (icon-192.png)
+function appLogoImg() {
+  return `<img src="/assets/icon-192.png" alt="Logo" style="width:140px;height:140px;display:block;margin:32px auto 16px auto;box-shadow:0 2px 16px #0002;border-radius:32px;" />`;
+}
+
 export async function viewIndex() {
   const { data } = await supabase.auth.getSession();
   if (data?.session?.user) {
@@ -173,12 +178,10 @@ export async function viewIndex() {
   }
 
   root.innerHTML = `
-    <section class="card" style="max-width:560px;margin:0 auto;">
-      <h1 style="text-align:center;">Dziennik nastrojów</h1>
-      <p class="muted" style="text-align:center;">
-        Zapisuj nastrój, obserwuj trendy i wracaj do swoich notatek.
-      </p>
-      <div class="row" style="flex-direction:column;align-items:stretch;">
+    <section class="card" style="max-width:400px;margin:40px auto 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100dvh - 80px);box-shadow:none;background:none;">
+      ${appLogoImg()}
+      <div style="font-size:1.2rem;font-weight:600;margin-bottom:24px;">Dziennik nastrojów</div>
+      <div class="row" style="flex-direction:column;align-items:stretch;width:100%;">
         <button class="btn primary" id="goLogin">Zaloguj się</button>
         <button class="btn" id="goRegister">Zarejestruj się</button>
       </div>
@@ -191,9 +194,10 @@ export async function viewIndex() {
 
 export async function viewLogowanie() {
   root.innerHTML = `
-    <section class="card" style="max-width:560px;margin:0 auto;">
-      <h1>Logowanie</h1>
-      <form id="loginForm" class="form">
+    <section class="card" style="max-width:400px;margin:40px auto 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100dvh - 80px);box-shadow:none;background:none;">
+      ${appLogoImg()}
+      <div style="font-size:1.2rem;font-weight:600;margin-bottom:24px;">Logowanie</div>
+      <form id="loginForm" class="form" style="width:100%;max-width:320px;">
         <label>Email <input name="email" type="email" autocomplete="email" required /></label>
         <label>Hasło <input name="password" type="password" autocomplete="current-password" required /></label>
         <div id="err" class="error" hidden></div>
@@ -235,9 +239,10 @@ export async function viewLogowanie() {
 
 export async function viewRejestracja() {
   root.innerHTML = `
-    <section class="card" style="max-width:560px;margin:0 auto;">
-      <h1>Rejestracja</h1>
-      <form id="regForm" class="form">
+    <section class="card" style="max-width:400px;margin:40px auto 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100dvh - 80px);box-shadow:none;background:none;">
+      ${appLogoImg()}
+      <div style="font-size:1.2rem;font-weight:600;margin-bottom:24px;">Rejestracja</div>
+      <form id="regForm" class="form" style="width:100%;max-width:320px;">
       <label>Imię
   <input name="first_name" type="text" required />
 </label>
@@ -271,17 +276,16 @@ export async function viewRejestracja() {
     const fd = new FormData(e.currentTarget);
     const email = String(fd.get("email") || "").trim();
     const password = String(fd.get("password") || "");
-
     const first_name = String(fd.get("first_name") || "").trim();
-const last_name = String(fd.get("last_name") || "").trim();
+    const last_name = String(fd.get("last_name") || "").trim();
 
-const { error } = await supabase.auth.signUp({
-  email,
-  password,
-  options: {
-    data: { first_name, last_name } // trafi do raw_user_meta_data
-  }
-});
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { first_name, last_name } // trafi do raw_user_meta_data
+      }
+    });
 
     if (error) {
       errEl.textContent = "Rejestracja nie powiodła się: " + error.message;
@@ -326,6 +330,19 @@ export async function viewHome() {
       </label>
 
       <div id="avatarErr" class="error" hidden></div>
+    </section>
+  `;
+
+  const weatherCard = `
+    <section class="card soft">
+      <div class="row" style="justify-content:space-between;align-items:center;">
+        <h2 style="margin:0;">Pogoda</h2>
+        <button class="btn" id="weatherRefresh">Odśwież</button>
+      </div>
+      <p class="muted" id="weatherOut">Ładowanie…</p>
+      <p class="muted" style="font-size:12px;margin-top:8px;">
+        Wykorzystuje geolokalizację urządzenia (native) + cache 30 min.
+      </p>
     </section>
   `;
 
@@ -388,13 +405,28 @@ export async function viewHome() {
     </section>
   `;
 
-  const summaryHtml = helloCard + lastEntriesHtml;
+  const summaryHtml = helloCard + weatherCard + lastEntriesHtml;
 
   await renderShell({
     title: "Start",
     active: "home",
     contentHtml: summaryHtml,
   });
+
+  async function paintWeather() {
+    const out = root.querySelector("#weatherOut");
+    if (!out) return;
+    out.textContent = "Ładowanie…";
+    const result = await getWeatherText();
+    out.textContent = result.text + (result.fromCache ? " (cache)" : "");
+  }
+
+  root.querySelector("#weatherRefresh")?.addEventListener("click", () => {
+    cacheSet("weather_cache", null);
+    paintWeather();
+  });
+
+  paintWeather();
 
   root.querySelector("#goNewTop")?.addEventListener("click", () => navigate("/(tabs)/new"));
   root.querySelector("#goNewEmpty")?.addEventListener("click", () => navigate("/(tabs)/new"));
@@ -605,7 +637,7 @@ export async function viewAdvice() {
   const tip = tips[idx];
 
   await renderShell({
-    title: "Rada",
+    title: "Rada na dziś",
     active: "advice",
     contentHtml: `
       <section class="card soft">
@@ -647,4 +679,66 @@ export async function viewOffline() {
 
 export async function view404() {
   root.innerHTML = `<section class="card"><h1>404</h1><p>Nie znaleziono widoku.</p></section>`;
+}
+
+function isFresh(ts, maxAgeMs) {
+  return typeof ts === "number" && Date.now() - ts < maxAgeMs;
+}
+
+async function getWeatherText() {
+  const cached = cacheGet("weather_cache", null);
+  if (cached?.text && Date.now() - cached.ts < 30 * 60 * 1000) {
+    return { text: cached.text, fromCache: true };
+  }
+
+  if (!navigator.onLine) {
+    if (cached?.text) return { text: cached.text, fromCache: true };
+    return { text: "Offline: brak danych o pogodzie.", fromCache: true };
+  }
+
+  if (!("geolocation" in navigator)) {
+    return { text: "Geolokalizacja niedostępna.", fromCache: false };
+  }
+
+  const pos = await new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000 });
+  }).catch((e) => ({ error: e }));
+
+  if (pos?.error) {
+    return {
+      text: pos.error.code === 1 ? "Brak zgody na lokalizację." : "Nie udało się pobrać lokalizacji.",
+      fromCache: false,
+    };
+  }
+
+  const { latitude, longitude } = pos.coords;
+
+  const weatherUrl =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(latitude)}` +
+    `&longitude=${encodeURIComponent(longitude)}` +
+    `&current=temperature_2m&timezone=auto`;
+
+  const weatherRes = await fetch(weatherUrl);
+  if (!weatherRes.ok) return { text: "Błąd pobierania pogody.", fromCache: false };
+
+  const weatherData = await weatherRes.json();
+  const temp = weatherData?.current?.temperature_2m;
+
+  const city = guessCityFromTimezone();
+  const text = `${city}: ${temp ?? "—"}°C`;
+
+  cacheSet("weather_cache", { ts: Date.now(), text });
+  return { text, fromCache: false };
+}
+
+function guessCityFromTimezone() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    // np. "Europe/Warsaw" → "Warsaw"
+    const city = tz.split("/").pop()?.replaceAll("_", " ");
+    return city || "Twoja okolica";
+  } catch {
+    return "Twoja okolica";
+  }
 }
