@@ -1,9 +1,105 @@
+// --- Interpretation for advice ---
+function interpret(score, entries) {
+  if (!score || !entries || !entries.length) return { level: "Brak danych", msg: "Brak wystarczających danych do analizy." };
+  const avgStress = entries.reduce((s, e) => s + (e.stres ?? e.stress), 0) / entries.length;
+  const avgEnergy = entries.reduce((s, e) => s + (e.energia ?? e.energy), 0) / entries.length;
+  const avgMood = entries.reduce((s, e) => s + (e.nastroj ?? e.mood), 0) / entries.length;
+  const percent = Math.round(score.avg * 100);
+
+  if (percent >= 70 && avgStress < 5) {
+    return {
+      level: "Super",
+      msg: "Masz stabilny, dobry okres. Warto tylko pilnować regeneracji.",
+    };
+  }
+  if (avgStress >= 7) {
+    return {
+      level: "Przeciążenie",
+      msg: "Stres jest wysoki i to on najbardziej obniża Twój dobrostan. Priorytet: obniżenie napięcia, nie zwiększanie produktywności.",
+    };
+  }
+  if (avgEnergy <= 4) {
+    return {
+      level: "Niskie zasoby",
+      msg: "Problemem nie jest motywacja, tylko brak energii. Skup się na odpoczynku i podstawach.",
+    };
+  }
+  if (percent < 40) {
+    return {
+      level: "Trudniejszy czas",
+      msg: "Ostatnio masz trudniejszy czas. Pamiętaj, że możesz poprosić o wsparcie.",
+    };
+  }
+  return {
+    level: "Średnio",
+    msg: "Jest w miarę OK, ale widać obszar do poprawy. Małe korekty wystarczą.",
+  };
+}
+// --- Aggregation for last 7 days ---
+function score7Days(entries) {
+  const last = entries.slice(-7);
+  if (!last.length) return null;
+  // Only use entries with all 3 valid numbers
+  const valid = last.filter(e => {
+    const mood = e.nastroj ?? e.mood;
+    const energy = e.energia ?? e.energy;
+    const stress = e.stres ?? e.stress;
+    return [mood, energy, stress].every(v => typeof v === 'number' && Number.isFinite(v));
+  });
+  if (!valid.length) return null;
+  const daily = valid.map(e =>
+    wellbeingScore({
+      mood: e.nastroj ?? e.mood,
+      energy: e.energia ?? e.energy,
+      stress: e.stres ?? e.stress,
+    })
+  );
+  if (!daily.length) return null;
+  const avg = daily.reduce((a, b) => a + b, 0) / daily.length;
+  return {
+    avg,
+    min: Math.min(...daily),
+    max: Math.max(...daily),
+    days: daily.length,
+    daily,
+  };
+}
+// --- Wellbeing normalization and scoring model ---
+function normPos(v, min = 1, max = 10) {
+  return Math.min(1, Math.max(0, (v - min) / (max - min)));
+}
+
+function normNeg(v, min = 1, max = 10) {
+  return 1 - normPos(v, min, max);
+}
+
+function wellbeingScore({ mood, energy, stress }) {
+  const m = normPos(mood);
+  const e = normPos(energy);
+  const s = normNeg(stress); // reversed stress
+
+  // weighted base score
+  let score = (0.35 * m) + (0.35 * e) + (0.30 * s);
+
+  // Penalty: high stress always drags down
+  if (stress >= 8) score -= 0.15;
+  if (stress >= 9) score -= 0.25;
+
+  // Penalty: very low energy
+  if (energy <= 3) score -= 0.1;
+
+  return Math.max(0, Math.min(1, score)); // clamp 0..1
+}
+// views.js
 import { supabase } from "./supabaseClient.js";
 import { navigate } from "./router.js";
 import { cacheGet, cacheSet } from "./offline.js";
 
 const root = document.getElementById("app");
 
+/* =========================
+   Utils
+========================= */
 function escapeHtml(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -27,28 +123,41 @@ async function requireAuth() {
   return user;
 }
 
-function activeTab(path) {
-  const p = (path || (location.hash || "#/").slice(1)) || "/";
-  return p;
+/* =========================
+   DB helpers
+========================= */
+
+// Cache klucz per-user (żeby nie mieszać wpisów między kontami)
+async function cacheKeyEntries() {
+  const { data: u } = await supabase.auth.getUser();
+  const userId = u?.user?.id || "anon";
+  return `wpisy_cache_${userId}`;
 }
 
-/* ---------- DB helpers ---------- */
 async function fetchEntries(limit = 50) {
+  const key = await cacheKeyEntries();
+
   // offline fallback
-  if (!navigator.onLine) return cacheGet("wpisy_cache", []);
+  if (!navigator.onLine) return cacheGet(key, []);
+
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  const userId = u?.user?.id;
+  if (ue || !userId) throw new Error("Brak użytkownika w sesji. Zaloguj się ponownie.");
 
   const { data, error } = await supabase
     .from("wpisy")
-    .select("id, data_wpisu, nastroj, opis, created_at, photo_path")
+    .select("id, user_id, data_wpisu, nastroj, energia, stres, opis, created_at, photo_path")
+    .eq("user_id", userId)
     .order("data_wpisu", { ascending: false })
     .limit(limit);
 
   if (error) throw error;
-  cacheSet("wpisy_cache", data ?? []);
+
+  cacheSet(key, data ?? []);
   return data ?? [];
 }
 
-async function insertEntry({ data_wpisu, nastroj, opis, photo_path }) {
+async function insertEntry({ data_wpisu, nastroj, energia, stres, opis, photo_path }) {
   if (!navigator.onLine) throw new Error("Brak internetu – zapis do bazy niedostępny.");
 
   const { data: u, error: ue } = await supabase.auth.getUser();
@@ -59,31 +168,91 @@ async function insertEntry({ data_wpisu, nastroj, opis, photo_path }) {
     user_id: userId,
     data_wpisu,
     nastroj,
-    ...(opis ? { opis } : {}),
-    ...(photo_path ? { photo_path } : {}),
+    energia,
+    stres,
+    opis: opis ? opis : null,
+    photo_path: photo_path ? photo_path : null,
   };
 
   const { error } = await supabase.from("wpisy").insert(payload);
   if (error) throw error;
 }
 
-// Helper do budowania URL zdjęcia (public / signed)
+async function updateEntry(id, { data_wpisu, nastroj, energia, stres, opis, photo_path }) {
+  if (!navigator.onLine) throw new Error("Brak internetu – edycja niedostępna offline.");
+
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  const userId = u?.user?.id;
+  if (ue || !userId) throw new Error("Brak użytkownika w sesji. Zaloguj się ponownie.");
+
+  const payload = {
+    data_wpisu,
+    nastroj,
+    energia,
+    stres,
+    opis: opis ? opis : null,
+    photo_path: photo_path ? photo_path : null,
+  };
+
+  const { error } = await supabase
+    .from("wpisy")
+    .update(payload)
+    .eq("id", id)
+    .eq("user_id", userId);
+
+  if (error) throw error;
+}
+
+async function deleteEntry(id) {
+  if (!navigator.onLine) throw new Error("Brak internetu – usuwanie niedostępne offline.");
+
+  const { data: u, error: ue } = await supabase.auth.getUser();
+  const userId = u?.user?.id;
+  if (ue || !userId) throw new Error("Brak użytkownika w sesji.");
+
+  // pobierz photo_path (może nie istnieć jeśli brak zdjęcia)
+  const { data: row, error: selErr } = await supabase
+    .from("wpisy")
+    .select("photo_path")
+    .eq("id", id)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (selErr) throw selErr;
+
+  const { error: delErr } = await supabase
+    .from("wpisy")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", userId);
+
+  if (delErr) throw delErr;
+
+  // usuń plik (opcjonalnie)
+  if (row?.photo_path) {
+    const { error: stErr } = await supabase.storage
+      .from("wpisy-photos")
+      .remove([row.photo_path]);
+
+    if (stErr) console.warn("Storage remove error:", stErr.message);
+  }
+}
+
+// URL zdjęcia (public bucket)
 function getPhotoUrl(photo_path) {
   if (!photo_path) return null;
-
-  // Jeśli bucket jest PUBLIC:
   const { data } = supabase.storage.from("wpisy-photos").getPublicUrl(photo_path);
   return data?.publicUrl || null;
 }
 
-// Helper do budowania URL avatara (public bucket)
+// URL avatara (public bucket)
 function getAvatarUrl(avatar_path) {
   if (!avatar_path) return null;
   const { data } = supabase.storage.from("avatars").getPublicUrl(avatar_path);
   return data?.publicUrl || null;
 }
 
-// Helper do pobierania profilu bieżącego użytkownika
+// Profil użytkownika
 async function fetchMyProfile() {
   const { data: u } = await supabase.auth.getUser();
   const userId = u?.user?.id;
@@ -99,7 +268,7 @@ async function fetchMyProfile() {
   return data;
 }
 
-// Helper do uploadu avatara i zapisu do profiles
+// Upload avatara + zapis do profiles (na razie nie używane na Home)
 async function uploadAvatar(file) {
   if (!navigator.onLine) throw new Error("Brak internetu – upload avatara niedostępny offline.");
 
@@ -111,8 +280,7 @@ async function uploadAvatar(file) {
   const fileName = `${crypto.randomUUID()}.${ext}`;
   const path = `${userId}/${fileName}`;
 
-  const { error: upErr } = await supabase
-    .storage
+  const { error: upErr } = await supabase.storage
     .from("avatars")
     .upload(path, file, { upsert: true, contentType: file.type });
 
@@ -128,7 +296,9 @@ async function uploadAvatar(file) {
   return path;
 }
 
-/* ---------- Layout shell (po zalogowaniu) ---------- */
+/* =========================
+   Shell
+========================= */
 async function renderShell({ title, active, contentHtml }) {
   const { data } = await supabase.auth.getSession();
   const email = data?.session?.user?.email || cacheGet("lastUserEmail", "");
@@ -162,14 +332,13 @@ async function renderShell({ title, active, contentHtml }) {
   });
 }
 
-/* =========================
-   PUBLIC: Landing / Auth
-========================= */
-// Zwraca HTML z logo PNG (icon-192.png)
 function appLogoImg() {
   return `<img src="/assets/icon-192.png" alt="Logo" style="width:140px;height:140px;display:block;margin:32px auto 16px auto;box-shadow:0 2px 16px #0002;border-radius:32px;" />`;
 }
 
+/* =========================
+   Views
+========================= */
 export async function viewIndex() {
   const { data } = await supabase.auth.getSession();
   if (data?.session?.user) {
@@ -204,7 +373,6 @@ export async function viewLogowanie() {
         <button class="btn primary" type="submit">Zaloguj się</button>
         <button class="btn link" type="button" id="toRegister">lub zarejestruj się</button>
       </form>
-      <p class="muted">Logowanie wymaga internetu.</p>
     </section>
   `;
 
@@ -243,20 +411,18 @@ export async function viewRejestracja() {
       ${appLogoImg()}
       <div style="font-size:1.2rem;font-weight:600;margin-bottom:24px;">Rejestracja</div>
       <form id="regForm" class="form" style="width:100%;max-width:320px;">
-      <label>Imię
-  <input name="first_name" type="text" required />
-</label>
-<label>Nazwisko
-  <input name="last_name" type="text" required />
-</label>
-
+        <label>Imię
+          <input name="first_name" type="text" required />
+        </label>
+        <label>Nazwisko
+          <input name="last_name" type="text" required />
+        </label>
         <label>Email <input name="email" type="email" autocomplete="email" required /></label>
         <label>Hasło <input name="password" type="password" minlength="6" autocomplete="new-password" required /></label>
         <div id="err" class="error" hidden></div>
         <button class="btn primary" type="submit">Zarejestruj się</button>
         <button class="btn link" type="button" id="toLogin">lub zaloguj się</button>
       </form>
-      <p class="muted">Rejestracja wymaga internetu.</p>
     </section>
   `;
 
@@ -283,8 +449,8 @@ export async function viewRejestracja() {
       email,
       password,
       options: {
-        data: { first_name, last_name } // trafi do raw_user_meta_data
-      }
+        data: { first_name, last_name },
+      },
     });
 
     if (error) {
@@ -297,41 +463,50 @@ export async function viewRejestracja() {
   });
 }
 
-/* =========================
-   PRIVATE: Start / New / History / Advice
-========================= */
-
-/** Start: podsumowanie + ostatnie wpisy, albo karta "dodaj pierwszy wpis" */
+/** Start: podsumowanie + ostatnie wpisy */
 export async function viewHome() {
   const user = await requireAuth();
   if (!user) return;
 
   let profile = null;
-  try { profile = await fetchMyProfile(); } catch (e) { /* pokaż błąd */ }
+  try {
+    profile = await fetchMyProfile();
+  } catch {
+    // ignoruj, pokaż fallbacki
+  }
 
-  const firstName = profile?.first_name || "👋";
+  const metaFirst = user?.user_metadata?.first_name;
+  const firstName =
+    profile?.first_name?.trim()
+      ? profile.first_name.trim()
+      : metaFirst?.trim()
+        ? String(metaFirst).trim()
+        : "użytkowniku";
+
   const avatarUrl = getAvatarUrl(profile?.avatar_path);
 
   const helloCard = `
-    <section class="card soft">
-      <div class="profile-row">
-        <div class="avatar">
-          ${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="Avatar" />` : `<div class="avatar-fallback">🙂</div>`}
+    <div class="card profile-card profile-welcome">
+      <div class="profile-row" style="display:flex;gap:14px;align-items:center;">
+        <div class="avatar" style="width:64px;height:64px;border-radius:18px;overflow:hidden;flex:0 0 auto;">
+          ${
+            avatarUrl
+              ? `<img src="${escapeHtml(avatarUrl)}" alt="Avatar" style="width:100%;height:100%;object-fit:cover;" />`
+              : `<div class="avatar-fallback" style="width:100%;height:100%;display:grid;place-items:center;background:#f2f4f7;">🙂</div>`
+          }
         </div>
-        <div class="profile-meta">
-          <div class="hello">Witaj, <strong>${escapeHtml(firstName)}</strong>!</div>
-          <div class="muted">Możesz dodać zdjęcie profilowe.</div>
+        <div class="hello" style="font-size:16px;">
+          Witaj, <strong>${escapeHtml(firstName)}</strong>!
         </div>
       </div>
-
-      <label class="file-label">
-        <input id="avatarInput" type="file" accept="image/*" />
-        <span class="btn">Ustaw zdjęcie profilowe</span>
-      </label>
-
-      <div id="avatarErr" class="error" hidden></div>
-    </section>
+      <button class="btn primary new-entry-btn">Nowy wpis</button>
+    </div>
   `;
+  // Obsługa przycisku Nowy wpis pod profilem
+  root.addEventListener("click", (e) => {
+    const btn = e.target.closest(".new-entry-btn");
+    if (btn) navigate("/(tabs)/new");
+  });
 
   const weatherCard = `
     <section class="card soft">
@@ -362,46 +537,51 @@ export async function viewHome() {
     <section class="card soft">
       <div class="row" style="justify-content:space-between;align-items:center;">
         <h2 style="margin:0;">Ostatnie wpisy</h2>
-        <button class="btn primary" id="goNewTop">Nowy wpis</button>
       </div>
 
       ${loadError ? `<p class="error">Błąd pobierania wpisów: ${escapeHtml(loadError)}</p>` : ""}
 
-      ${!hasEntries ? `
-        <p class="muted">Nie masz jeszcze wpisów.</p>
-        <button class="btn primary" id="goNewEmpty">Dodaj pierwszy wpis</button>
-      ` : `
-        <div class="entries">
-          ${entries.map((w) => {
-            const photoUrl = getPhotoUrl(w.photo_path);
-            return `
-              <article class="entry">
-                <div class="entry-top">
-                  <div class="entry-date">${escapeHtml(w.data_wpisu)}</div>
-                  <div class="mood-pill">Nastrój: <strong>${escapeHtml(w.nastroj)}</strong></div>
-                </div>
+      ${
+        !hasEntries
+          ? `
+            <p class="muted">Nie masz jeszcze wpisów.</p>
+            <button class="btn primary" id="goNewEmpty">Dodaj pierwszy wpis</button>
+          `
+          : `
+            <div class="entries" id="homeEntries">
+              ${entries
+                .map((w) => {
+                  const photoUrl = getPhotoUrl(w.photo_path);
+                  return `
+                    <article class="entry entry--feed" data-id="${escapeHtml(w.id)}">
+                      <div class="entry-head">
+                        <div class="entry-date">${escapeHtml(w.data_wpisu)}</div>
+                        <button class="icon-btn" type="button" data-action="delete" aria-label="Usuń wpis" title="Usuń wpis">🗑️</button>
+                      </div>
 
-                ${photoUrl ? `
-                  <img class="entry-photo"
-                       src="${escapeHtml(photoUrl)}"
-                       alt="Zdjęcie wpisu"
-                       loading="lazy">
-                ` : ""}
+                      ${photoUrl ? `
+                        <div class="entry-media">
+                          <img class="entry-photo"
+                               src="${escapeHtml(photoUrl)}"
+                               alt="Zdjęcie wpisu"
+                               loading="lazy">
+                        </div>
+                      ` : ""}
 
-                ${w.opis ? `<div class="entry-desc">${escapeHtml(w.opis)}</div>` : `<div class="muted">—</div>`}
+                      <div class="entry-metrics">
+                        <span class="pill">Nastrój: <strong>${escapeHtml(w.nastroj)}</strong></span>
+                        <span class="pill">Energia: <strong>${escapeHtml(w.energia ?? "—")}</strong></span>
+                        <span class="pill">Stres: <strong>${escapeHtml(w.stres ?? "—")}</strong></span>
+                      </div>
 
-                <div class="row" style="margin-top:10px;">
-                  <button class="btn" data-go="history">Historia</button>
-                </div>
-              </article>
-            `;
-          }).join("")}
-        </div>
-
-        <div class="row" style="margin-top:10px;">
-          <button class="btn" id="goHistory">Zobacz całą historię</button>
-        </div>
-      `}
+                      ${w.opis ? `<div class="entry-desc">${escapeHtml(w.opis)}</div>` : ""}
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>
+          `
+      }
     </section>
   `;
 
@@ -412,6 +592,34 @@ export async function viewHome() {
     active: "home",
     contentHtml: summaryHtml,
   });
+
+  // --- eventy Home (po renderShell!) ---
+  root.querySelector("#goNewTop")?.addEventListener("click", () => navigate("/(tabs)/new"));
+  root.querySelector("#goNewEmpty")?.addEventListener("click", () => navigate("/(tabs)/new"));
+
+  // kosz: delegacja na root, ale tylko dla widoku Home
+  // (podpinamy raz na render widoku)
+  const homeEntries = root.querySelector("#homeEntries");
+  if (homeEntries) {
+    homeEntries.addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-action='delete']");
+      if (!btn) return;
+
+      const article = btn.closest("article[data-id]");
+      const id = article?.getAttribute("data-id");
+      if (!id) return;
+
+      const ok = confirm("Usunąć ten wpis? Tej operacji nie da się cofnąć.");
+      if (!ok) return;
+
+      try {
+        await deleteEntry(id);
+        article.remove();
+      } catch (err) {
+        alert(err?.message || String(err));
+      }
+    });
+  }
 
   async function paintWeather() {
     const out = root.querySelector("#weatherOut");
@@ -427,30 +635,6 @@ export async function viewHome() {
   });
 
   paintWeather();
-
-  root.querySelector("#goNewTop")?.addEventListener("click", () => navigate("/(tabs)/new"));
-  root.querySelector("#goNewEmpty")?.addEventListener("click", () => navigate("/(tabs)/new"));
-  root.querySelector("#goHistory")?.addEventListener("click", () => navigate("/(tabs)/history"));
-  root.querySelectorAll('[data-go="history"]').forEach((b) =>
-    b.addEventListener("click", () => navigate("/(tabs)/history"))
-  );
-
-  const avatarInput = root.querySelector("#avatarInput");
-  const avatarErr = root.querySelector("#avatarErr");
-
-  avatarInput?.addEventListener("change", async () => {
-    const file = avatarInput.files?.[0];
-    if (!file) return;
-
-    avatarErr.hidden = true;
-    try {
-      await uploadAvatar(file);
-      navigate("/(tabs)/home"); // szybki refresh widoku
-    } catch (e) {
-      avatarErr.textContent = e?.message || String(e);
-      avatarErr.hidden = false;
-    }
-  });
 }
 
 /** Nowy wpis: formularz */
@@ -471,15 +655,55 @@ export async function viewNewEntry() {
           <label>Nastrój (1–10)
             <input name="nastroj" type="number" min="1" max="10" step="1" required />
           </label>
+          <label>Energia (1–10)
+            <input name="energia" type="number" min="1" max="10" step="1" required />
+          </label>
+          <label>Stres (1–10)
+            <input name="stres" type="number" min="1" max="10" step="1" required />
+          </label>
           <label>Opis (opcjonalnie)
             <textarea name="opis" rows="4" placeholder="Co się dziś wydarzyło?"></textarea>
           </label>
-          <label>Zdjęcie (opcjonalnie)
-            <input name="photo" id="photoInput" type="file" accept="image/*" capture="environment" />
-          </label>
-          <div id="photoPreviewWrap" hidden>
-            <img id="photoPreview" class="photo-preview" alt="Podgląd zdjęcia" />
+
+          <div class="row" style="gap:10px;flex-wrap:wrap;">
+            <button class="btn" type="button" id="pickFromGallery">Dodaj z galerii</button>
+            <button class="btn" type="button" id="takePhoto">Zrób zdjęcie</button>
+
+            <input id="photoGalleryInput" type="file" accept="image/*" hidden />
+            <input id="photoCameraInput" type="file" accept="image/*" capture="environment" hidden />
           </div>
+
+          <div id="photoCropWrap" hidden style="margin-top:10px;">
+            <div id="cropFrame"
+                 style="width:100%; aspect-ratio:16/9; border-radius:14px; overflow:hidden; background:#0001; position:relative;">
+              <img id="cropImg"
+                   alt="Podgląd"
+                   style="position:absolute; left:0; top:0; transform-origin:0 0; user-select:none; touch-action:none; will-change:transform;" />
+            </div>
+
+            <div class="row" style="margin-top:10px;gap:10px;flex-wrap:wrap; align-items:center;">
+              <label class="muted" style="font-size:12px;">
+                Zoom
+                <input id="zoomRange" type="range" min="1" max="3" step="0.01" value="1" />
+              </label>
+
+              <label class="muted" style="font-size:12px;">
+                Rozmiar
+                <select id="outSize">
+                  <option value="1280x720">1280×720</option>
+                  <option value="1920x1080" selected>1920×1080</option>
+                  <option value="2560x1440">2560×1440</option>
+                </select>
+              </label>
+
+              <button class="btn" type="button" id="removePhoto">Usuń zdjęcie</button>
+            </div>
+
+            <p class="muted" style="font-size:12px;margin-top:8px;">
+              Przeciągnij zdjęcie palcem/myszką, ustaw kadr 16:9.
+            </p>
+          </div>
+
           <div id="err" class="error" hidden></div>
           <button class="btn primary" type="submit">Zapisz</button>
         </form>
@@ -487,18 +711,156 @@ export async function viewNewEntry() {
     `,
   });
 
-  const photoInput = root.querySelector("#photoInput");
-  const previewWrap = root.querySelector("#photoPreviewWrap");
-  const previewImg = root.querySelector("#photoPreview");
+  // Cropper
+  const galleryBtn = root.querySelector("#pickFromGallery");
+  const cameraBtn = root.querySelector("#takePhoto");
+  const galleryInput = root.querySelector("#photoGalleryInput");
+  const cameraInput = root.querySelector("#photoCameraInput");
 
-  photoInput.addEventListener("change", () => {
-    const file = photoInput.files?.[0];
-    if (!file) {
-      previewWrap.hidden = true;
-      return;
-    }
-    previewImg.src = URL.createObjectURL(file);
-    previewWrap.hidden = false;
+  const cropWrap = root.querySelector("#photoCropWrap");
+  const cropFrame = root.querySelector("#cropFrame");
+  const cropImg = root.querySelector("#cropImg");
+  const zoomRange = root.querySelector("#zoomRange");
+  const outSizeSel = root.querySelector("#outSize");
+  const removeBtn = root.querySelector("#removePhoto");
+
+  let selectedFile = null;
+  let imgNaturalW = 0;
+  let imgNaturalH = 0;
+
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  function setTransform() {
+    cropImg.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+  }
+
+  function clampOffsets() {
+    const frameW = cropFrame.clientWidth;
+    const frameH = cropFrame.clientHeight;
+
+    const minScaleX = frameW / imgNaturalW;
+    const minScaleY = frameH / imgNaturalH;
+    const minScale = Math.max(minScaleX, minScaleY);
+
+    if (scale < minScale) scale = minScale;
+
+    const scaledW = imgNaturalW * scale;
+    const scaledH = imgNaturalH * scale;
+
+    const maxOffsetX = 0;
+    const maxOffsetY = 0;
+    const minOffsetX = frameW - scaledW;
+    const minOffsetY = frameH - scaledH;
+
+    if (offsetX > maxOffsetX) offsetX = maxOffsetX;
+    if (offsetY > maxOffsetY) offsetY = maxOffsetY;
+    if (offsetX < minOffsetX) offsetX = minOffsetX;
+    if (offsetY < minOffsetY) offsetY = minOffsetY;
+  }
+
+  async function loadFileToCropper(file) {
+    selectedFile = file;
+    const url = URL.createObjectURL(file);
+
+    cropImg.onload = () => {
+      imgNaturalW = cropImg.naturalWidth;
+      imgNaturalH = cropImg.naturalHeight;
+
+      const frameW = cropFrame.clientWidth;
+      const frameH = cropFrame.clientHeight;
+      const minScale = Math.max(frameW / imgNaturalW, frameH / imgNaturalH);
+
+      zoomRange.value = "1";
+      scale = minScale;
+
+      const scaledW = imgNaturalW * scale;
+      const scaledH = imgNaturalH * scale;
+      offsetX = (frameW - scaledW) / 2;
+      offsetY = (frameH - scaledH) / 2;
+
+      clampOffsets();
+      setTransform();
+      cropWrap.hidden = false;
+    };
+
+    cropImg.src = url;
+  }
+
+  galleryBtn?.addEventListener("click", () => galleryInput.click());
+  cameraBtn?.addEventListener("click", () => cameraInput.click());
+
+  galleryInput?.addEventListener("change", async () => {
+    const f = galleryInput.files?.[0];
+    if (!f) return;
+    await loadFileToCropper(f);
+  });
+
+  cameraInput?.addEventListener("change", async () => {
+    const f = cameraInput.files?.[0];
+    if (!f) return;
+    await loadFileToCropper(f);
+  });
+
+  zoomRange?.addEventListener("input", () => {
+    if (!imgNaturalW) return;
+
+    const frameW = cropFrame.clientWidth;
+    const frameH = cropFrame.clientHeight;
+    const minScale = Math.max(frameW / imgNaturalW, frameH / imgNaturalH);
+
+    const z = Number(zoomRange.value);
+    const prevScale = scale;
+    scale = minScale * z;
+
+    const cx = frameW / 2;
+    const cy = frameH / 2;
+    offsetX = cx - (cx - offsetX) * (scale / prevScale);
+    offsetY = cy - (cy - offsetY) * (scale / prevScale);
+
+    clampOffsets();
+    setTransform();
+  });
+
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  cropFrame?.addEventListener("pointerdown", (e) => {
+    if (!imgNaturalW) return;
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    cropFrame.setPointerCapture?.(e.pointerId);
+  });
+
+  cropFrame?.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+
+    offsetX += dx;
+    offsetY += dy;
+
+    clampOffsets();
+    setTransform();
+  });
+
+  cropFrame?.addEventListener("pointerup", () => { dragging = false; });
+  cropFrame?.addEventListener("pointercancel", () => { dragging = false; });
+
+  removeBtn?.addEventListener("click", () => {
+    selectedFile = null;
+    imgNaturalW = 0;
+    imgNaturalH = 0;
+    cropImg.src = "";
+    cropWrap.hidden = true;
+    galleryInput.value = "";
+    cameraInput.value = "";
   });
 
   root.querySelector("#entryForm").addEventListener("submit", async (e) => {
@@ -509,6 +871,8 @@ export async function viewNewEntry() {
     const fd = new FormData(e.currentTarget);
     const data_wpisu = String(fd.get("data_wpisu") || "").trim();
     const nastroj = Number(fd.get("nastroj"));
+    const energia = Number(fd.get("energia"));
+    const stres = Number(fd.get("stres"));
     const opis = String(fd.get("opis") || "").trim();
 
     if (!Number.isFinite(nastroj) || nastroj < 1 || nastroj > 10) {
@@ -516,34 +880,73 @@ export async function viewNewEntry() {
       errEl.hidden = false;
       return;
     }
+    if (!Number.isFinite(energia) || energia < 1 || energia > 10) {
+      errEl.textContent = "Energia musi być liczbą 1–10.";
+      errEl.hidden = false;
+      return;
+    }
+    if (!Number.isFinite(stres) || stres < 1 || stres > 10) {
+      errEl.textContent = "Stres musi być liczbą 1–10.";
+      errEl.hidden = false;
+      return;
+    }
 
     try {
+      async function makeCroppedBlob16x9() {
+        if (!selectedFile || !imgNaturalW) return null;
+
+        const [outW, outH] = String(outSizeSel.value || "1920x1080")
+          .split("x")
+          .map((n) => Number(n));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Brak kontekstu canvas.");
+
+        const frameW = cropFrame.clientWidth;
+        const frameH = cropFrame.clientHeight;
+
+        const srcX = (0 - offsetX) / scale;
+        const srcY = (0 - offsetY) / scale;
+        const srcW = frameW / scale;
+        const srcH = frameH / scale;
+
+        ctx.drawImage(cropImg, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
+
+        const blob = await new Promise((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg", 0.9)
+        );
+
+        if (!blob) throw new Error("Nie udało się wygenerować pliku zdjęcia.");
+        return blob;
+      }
+
       let photo_path = null;
 
-      const file = photoInput.files?.[0];
-      if (file) {
+      if (selectedFile) {
         if (!navigator.onLine) throw new Error("Brak internetu – upload zdjęcia niedostępny offline.");
 
         const { data: u, error: ue } = await supabase.auth.getUser();
         const userId = u?.user?.id;
         if (ue || !userId) throw new Error("Brak użytkownika w sesji.");
 
-        const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-        const fileName = `${crypto.randomUUID()}.${ext}`;
+        const blob = await makeCroppedBlob16x9();
+        const fileName = `${crypto.randomUUID()}.jpg`;
         const path = `${userId}/${fileName}`;
 
-        const { error: upErr } = await supabase
-          .storage
+        const { error: upErr } = await supabase.storage
           .from("wpisy-photos")
-          .upload(path, file, { upsert: false, contentType: file.type });
+          .upload(path, blob, { upsert: false, contentType: "image/jpeg" });
 
         if (upErr) throw new Error("Upload zdjęcia: " + upErr.message);
 
         photo_path = path;
       }
 
-      // zapis wpisu (z photo_path)
-      await insertEntry({ data_wpisu, nastroj, opis, photo_path });
+      // ✅ KLUCZOWA POPRAWKA: zapisujemy energia i stres do bazy
+      await insertEntry({ data_wpisu, nastroj, energia, stres, opis, photo_path });
 
       navigate("/(tabs)/home");
     } catch (e2) {
@@ -553,7 +956,9 @@ export async function viewNewEntry() {
   });
 }
 
-/** Historia: pełna lista */
+/** Historia: lista + filtrowanie po dacie + ed**
+
+/** Historia: lista + filtrowanie po dacie + edycja + usuwanie */
 export async function viewHistory() {
   const user = await requireAuth();
   if (!user) return;
@@ -561,7 +966,7 @@ export async function viewHistory() {
   let entries = [];
   let errorMsg = "";
   try {
-    entries = await fetchEntries(100);
+    entries = await fetchEntries(200);
   } catch (e) {
     errorMsg = e?.message || String(e);
   }
@@ -571,60 +976,207 @@ export async function viewHistory() {
     active: "history",
     contentHtml: `
       <section class="card soft">
-        <div class="row" style="justify-content:space-between;align-items:center;">
-          <h2 style="margin:0;">Historia wpisów</h2>
-          <button class="btn primary" id="goNew">Nowy wpis</button>
+        <div class="history-toolbar">
+          <div class="history-title">
+            <h2>Historia wpisów</h2>
+          </div>
+
+          <div class="history-actions">
+            <button class="btn primary" id="goNew">Nowy wpis</button>
+          </div>
+
+          <div class="history-filters">
+            <div class="field">
+              <label for="dateFrom">Od:</label>
+              <input id="dateFrom" type="date" />
+            </div>
+
+            <div class="field">
+              <label for="dateTo">Do:</label>
+              <input id="dateTo" type="date" />
+            </div>
+
+            <button class="btn" id="applyFilter">Filtruj</button>
+            <button class="btn" id="clearFilter">Wyczyść</button>
+          </div>
         </div>
 
         ${errorMsg ? `<p class="error">${escapeHtml(errorMsg)}</p>` : ""}
 
-        ${entries.length === 0 ? `
-          <p class="muted">Brak wpisów. Dodaj pierwszy wpis.</p>
-        ` : `
-          <div class="entries">
-            ${entries
-              .map((w) => {
-                const photoUrl = getPhotoUrl(w.photo_path);
-                return `
-                  <article class="entry">
-                    <div class="entry-top">
-                      <div class="entry-date">${escapeHtml(w.data_wpisu)}</div>
-                      <div class="mood-pill">Nastrój: <strong>${escapeHtml(w.nastroj)}</strong></div>
-                    </div>
-
-                    ${photoUrl ? `
-                      <img
-                        class="entry-photo"
-                        src="${escapeHtml(photoUrl)}"
-                        alt="Zdjęcie wpisu"
-                        loading="lazy">
-                    ` : ""}
-
-                    ${w.opis ? `<div class="entry-desc">${escapeHtml(w.opis)}</div>` : `<div class="muted">—</div>`}
-
-                    <div class="muted" style="font-size:12px;margin-top:6px;">${escapeHtml(w.created_at ? new Date(w.created_at).toLocaleString("pl-PL") : "")}</div>
-                  </article>
-                `;
-              })
-              .join("")}
-          </div>
-
-          <div class="row" style="margin-top:10px;">
-            <button class="btn" id="goHistory">Zobacz całą historię</button>
-          </div>
-        `}
+        <div id="historyErr" class="error" hidden></div>
+        <div id="entriesWrap"></div>
       </section>
     `,
   });
 
   root.querySelector("#goNew").addEventListener("click", () => navigate("/(tabs)/new"));
+
+  const wrap = root.querySelector("#entriesWrap");
+  const errEl = root.querySelector("#historyErr");
+
+  function applyDateFilter(list, from, to) {
+    if (!from && !to) return list;
+    return list.filter((e) => {
+      const d = e.data_wpisu; // YYYY-MM-DD
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
+  }
+
+  function renderEntries(list) {
+    if (!wrap) return;
+
+    if (!list || list.length === 0) {
+      wrap.innerHTML = `<p class="muted">Brak wpisów${entries.length ? " w tym zakresie dat." : "."}</p>`;
+      return;
+    }
+
+    wrap.innerHTML = `
+      <div class="entries">
+        ${list
+          .map((w) => {
+            const photoUrl = getPhotoUrl(w.photo_path);
+            return `
+              <article class="entry" data-id="${escapeHtml(w.id)}">
+                <div class="entry-head">
+                  <div class="entry-date">${escapeHtml(w.data_wpisu)}</div>
+                  <button class="icon-btn" type="button" data-action="delete" aria-label="Usuń wpis" title="Usuń wpis">🗑️</button>
+                </div>
+
+                ${photoUrl
+                  ? `
+                  <div class="entry-photo-wrap"
+                       style="width:100%; aspect-ratio:16/9; border-radius:14px; overflow:hidden; background:#0001;">
+                    <img class="entry-photo"
+                         src="${escapeHtml(photoUrl)}"
+                         alt="Zdjęcie wpisu"
+                         loading="lazy"
+                         style="width:100%; height:100%; object-fit:contain; display:block;" />
+                  </div>
+                `
+                  : ""}
+
+                <div class="entry-metrics">
+                  <span class="pill">Nastrój: <strong>${escapeHtml(w.nastroj ?? "—")}</strong></span>
+                  <span class="pill">Energia: <strong>${escapeHtml(w.energia ?? "—")}</strong></span>
+                  <span class="pill">Stres: <strong>${escapeHtml(w.stres ?? "—")}</strong></span>
+                </div>
+
+                ${w.opis ? `<div class="entry-desc">${escapeHtml(w.opis)}</div>` : `<div class="muted">—</div>`}
+
+                <div class="muted" style="font-size:12px;margin-top:6px;">
+                  ${escapeHtml(w.created_at ? new Date(w.created_at).toLocaleString("pl-PL") : "")}
+                </div>
+
+                <div class="row" style="margin-top:10px;gap:10px;flex-wrap:wrap;">
+                  <button class="btn" data-action="edit">Edytuj</button>
+                  <button class="btn" data-action="delete">Usuń</button>
+                </div>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
+  }
+
+  // pierwszy render
+  renderEntries(entries);
+
+  root.querySelector("#applyFilter")?.addEventListener("click", () => {
+    const from = root.querySelector("#dateFrom")?.value || "";
+    const to = root.querySelector("#dateTo")?.value || "";
+    const filtered = applyDateFilter(entries, from, to);
+    renderEntries(filtered);
+  });
+
+  root.querySelector("#clearFilter")?.addEventListener("click", () => {
+    const df = root.querySelector("#dateFrom");
+    const dt = root.querySelector("#dateTo");
+    if (df) df.value = "";
+    if (dt) dt.value = "";
+    renderEntries(entries);
+  });
+
+  // delegacja klików dla edit/delete
+  wrap?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-action]");
+    if (!btn) return;
+
+    const article = e.target.closest("article[data-id]");
+    const id = article?.getAttribute("data-id");
+    if (!id) return;
+
+    const action = btn.getAttribute("data-action");
+    errEl.hidden = true;
+
+    const entry = entries.find((x) => String(x.id) === String(id));
+    if (!entry) return;
+
+    try {
+      if (action === "delete") {
+        const ok = confirm("Na pewno usunąć ten wpis? Tej operacji nie da się cofnąć.");
+        if (!ok) return;
+
+        await deleteEntry(id);
+
+        entries = entries.filter((x) => String(x.id) !== String(id));
+        // utrzymaj sort po dacie malejąco
+        entries.sort((a, b) => (a.data_wpisu < b.data_wpisu ? 1 : -1));
+
+        renderEntries(entries);
+
+        const key = await cacheKeyEntries();
+        cacheSet(key, entries);
+        return;
+      }
+
+      if (action === "edit") {
+        // szybka edycja: prompt (działa natychmiast). Jak chcesz modal — zrobię.
+        const newDate = prompt("Data (YYYY-MM-DD):", entry.data_wpisu) || entry.data_wpisu;
+        const newMoodStr = prompt("Nastrój (1-10):", String(entry.nastroj)) || String(entry.nastroj);
+        const newDesc = prompt("Opis:", entry.opis || "") ?? (entry.opis || "");
+
+        const newMood = Number(newMoodStr);
+        if (!Number.isFinite(newMood) || newMood < 1 || newMood > 10) {
+          throw new Error("Nastrój musi być liczbą 1–10.");
+        }
+
+        await updateEntry(id, {
+          data_wpisu: newDate,
+          nastroj: newMood,
+          opis: newDesc.trim(),
+          photo_path: entry.photo_path, // bez zmiany zdjęcia w tej wersji
+        });
+
+        entries = entries.map((x) =>
+          String(x.id) === String(id)
+            ? { ...x, data_wpisu: newDate, nastroj: newMood, opis: newDesc.trim() }
+            : x
+        );
+
+        entries.sort((a, b) => (a.data_wpisu < b.data_wpisu ? 1 : -1));
+        renderEntries(entries);
+
+        const key = await cacheKeyEntries();
+        cacheSet(key, entries);
+      }
+    } catch (err) {
+      errEl.textContent = err?.message || String(err);
+      errEl.hidden = false;
+    }
+  });
 }
 
-/** Rada: prosta logika + offline */
+/** Rada */
 export async function viewAdvice() {
   const user = await requireAuth();
   if (!user) return;
 
+
+
+  // --- New wellbeing model integration ---
   const tips = [
     "Zrób 10-minutowy spacer bez telefonu.",
     "Zapisz 3 rzeczy, za które jesteś wdzięczna.",
@@ -632,9 +1184,26 @@ export async function viewAdvice() {
     "Zrób 5 głębokich oddechów (4 sek wdech, 6 sek wydech).",
     "Napisz jedną małą rzecz, którą możesz dziś domknąć.",
   ];
-
-  const idx = Math.floor((Date.now() / (1000 * 60 * 60 * 24)) % tips.length); // “rady dnia”
+  const idx = Math.floor((Date.now() / (1000 * 60 * 60 * 24)) % tips.length);
   const tip = tips[idx];
+
+  let summaryHtml = "";
+  let entries = [];
+  try {
+    entries = await fetchEntries(7);
+  } catch {}
+  const score = entries.length ? score7Days(entries) : null;
+  if (score && typeof score.avg === "number") {
+    const percent = Math.round(score.avg * 100);
+    const interp = interpret(score, entries);
+    summaryHtml = `
+      <div class=\"muted\" style=\"font-size:15px;margin-bottom:6px;\">
+        Wynik dobrostanu: <strong>${percent}</strong> / 100
+        <span style=\"font-size:12px;color:#888;\">(${score.days} dni)</span>
+      </div>
+      <div class=\"quote\" style=\"color:#1a7f37;\"><strong>${escapeHtml(interp.level)}</strong>: ${escapeHtml(interp.msg)}</div>
+    `;
+  }
 
   await renderShell({
     title: "Rada na dziś",
@@ -642,7 +1211,7 @@ export async function viewAdvice() {
     contentHtml: `
       <section class="card soft">
         <h2>Rada na dziś</h2>
-        <p class="quote">${escapeHtml(tip)}</p>
+        ${summaryHtml || `<p class="quote">${escapeHtml(tip)}</p>`}
         <p class="muted">To prosta sugestia – nie diagnoza. Jeśli czujesz, że jest źle przez dłuższy czas, warto porozmawiać ze specjalistą.</p>
         <div class="row">
           <button class="btn" id="backHome">Wróć na Start</button>
@@ -660,7 +1229,8 @@ export async function viewAdvice() {
    OFFLINE / 404
 ========================= */
 export async function viewOffline() {
-  const cachedEntries = cacheGet("wpisy_cache", []);
+  const key = await cacheKeyEntries();
+  const cachedEntries = cacheGet(key, []);
   root.innerHTML = `
     <section class="card">
       <h1>Tryb offline</h1>
@@ -681,10 +1251,9 @@ export async function view404() {
   root.innerHTML = `<section class="card"><h1>404</h1><p>Nie znaleziono widoku.</p></section>`;
 }
 
-function isFresh(ts, maxAgeMs) {
-  return typeof ts === "number" && Date.now() - ts < maxAgeMs;
-}
-
+/* =========================
+   Weather
+========================= */
 async function getWeatherText() {
   const cached = cacheGet("weather_cache", null);
   if (cached?.text && Date.now() - cached.ts < 30 * 60 * 1000) {
@@ -735,7 +1304,6 @@ async function getWeatherText() {
 function guessCityFromTimezone() {
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-    // np. "Europe/Warsaw" → "Warsaw"
     const city = tz.split("/").pop()?.replaceAll("_", " ");
     return city || "Twoja okolica";
   } catch {

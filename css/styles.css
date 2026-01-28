@@ -1,9 +1,34 @@
+/* Historia: toolbar i filtry */
+.history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  margin-bottom: 24px;
+}
+.history-title {
+  flex: 1 1 100%;
+}
+.history-actions {
+  flex: 0 0 auto;
+}
+.history-filters {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.history-filters .field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 :root {
   --bg: #f6f7fb;
   --surface: #ffffff;
   --text: #1f2328;
   --muted: #6b7280;
-  --border: #e5e7eb;
 
   --primary: #e76617;
   --primary-hover: #cf5a12;
@@ -11,16 +36,18 @@
   --focus: rgba(231, 102, 23, 0.25);
 
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-  --radius: 16px;
+  --shadow-soft: 0 8px 22px rgba(0,0,0,0.08);
 
+  --radius: 16px;
   --maxw: 920px;
+
+  /* zostawiamy border jako zmienną, ale realnie nie używamy go na kartach */
+  --border: #e5e7eb;
 }
 
 * { box-sizing: border-box; }
 
-html, body {
-  height: 100%;
-}
+html, body { height: 100%; }
 
 body {
   margin: 0;
@@ -30,19 +57,44 @@ body {
   line-height: 1.4;
 }
 
-/* ===== Topbar (opcjonalnie) ===== */
+/* =========================
+   TOPBAR
+========================= */
 .topbar {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: rgba(246, 247, 251, 0.9);
+  background: rgba(255,255,255,0.92);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0; /* bez ramki */
+  box-shadow: 0 6px 18px rgba(0,0,0,0.06); /* separacja bez obwódki */
 }
 
-.topbar .brand {
-  font-weight: 800;
-  letter-spacing: 0.2px;
+.topbar-inner {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  padding: 12px 20px;
+}
+
+.topbar-center { text-align: center; }
+
+.brand {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.3px;
+}
+
+.topbar-right {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.guest-nav {
+  display: flex;
+  gap: 14px;
 }
 
 .nav {
@@ -57,38 +109,38 @@ body {
   text-decoration: none;
   padding: 6px 10px;
   border-radius: 10px;
-  border: 1px solid transparent;
+  border: 0;
 }
 
 .nav a:hover {
   background: #00000006;
-  border-color: #00000010;
 }
 
-/* ===== Layout ===== */
+.logout-btn {
+  background: transparent;
+  border: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-weight: 700;
+}
+.logout-btn:hover { background: #00000006; }
+
+/* =========================
+   LAYOUT
+========================= */
 .container {
   max-width: var(--maxw);
   margin: 0 auto;
   padding: 16px;
 }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+.shell {
+  max-width: var(--maxw);
+  margin: 0 auto;
   padding: 16px;
-  box-shadow: var(--shadow);
 }
 
-.card h1, .card h2, .card h3 {
-  margin: 0 0 10px 0;
-}
-
-hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 16px 0;
-}
+.shell-content { display: grid; gap: 12px; }
 
 .row {
   display: flex;
@@ -97,41 +149,71 @@ hr {
   align-items: center;
 }
 
-/* ===== Typografia pomocnicza ===== */
-.muted {
-  color: var(--muted);
+hr {
+  border: none;
+  border-top: 1px solid #00000010;
+  margin: 16px 0;
 }
+
+/* =========================
+   KARTY – bez ramek, tylko cień
+========================= */
+.card,
+.card.soft {
+  background: var(--surface);
+  border: 0;                 /* usuń ramki */
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow-soft); /* separacja cieniem */
+}
+
+.card.soft {
+  background: var(--surface); /* bez szarego tła */
+}
+
+/* Drobniejsza wersja cienia, jeśli chcesz */
+.section-shadow {
+  box-shadow: 0 6px 16px rgba(0,0,0,0.07);
+}
+
+.card h1, .card h2, .card h3 { margin: 0 0 10px 0; }
+
+/* =========================
+   TYPO
+========================= */
+.muted { color: var(--muted); }
 
 .error {
   color: #b42318;
-  font-weight: 700;
+  font-weight: 800;
   padding: 10px 12px;
-  border: 1px solid rgba(180, 35, 24, 0.25);
-  background: rgba(180, 35, 24, 0.06);
+  background: rgba(180, 35, 24, 0.08);
   border-radius: 12px;
+  border: 0;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.06);
 }
 
-/* ===== Formularze ===== */
-.form {
-  display: grid;
-  gap: 12px;
-}
+/* =========================
+   FORMY
+========================= */
+.form { display: grid; gap: 12px; }
 
 label {
   display: grid;
   gap: 6px;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 input, textarea, select {
   width: 100%;
   padding: 12px 12px;
   border-radius: 12px;
-  border: 1px solid var(--border);
+  border: 0; /* bez ramek */
   background: #fff;
   color: var(--text);
   font-size: 16px;
   outline: none;
+  box-shadow: 0 0 0 1px #00000010; /* delikatny “hairline” zamiast border */
 }
 
 textarea {
@@ -140,42 +222,38 @@ textarea {
 }
 
 input:focus, textarea:focus, select:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 4px var(--focus);
+  box-shadow: 0 0 0 1px var(--primary), 0 0 0 4px var(--focus);
 }
 
-/* ===== Buttons ===== */
+/* =========================
+   BUTTONS
+========================= */
 .btn {
   appearance: none;
-  border: 1px solid var(--border);
+  border: 0; /* bez ramek */
   background: #fff;
   color: var(--text);
   padding: 12px 14px;
   border-radius: 12px;
-  font-weight: 800;
+  font-weight: 900;
   cursor: pointer;
-  transition: transform 0.05s ease, background 0.2s ease, border-color 0.2s ease;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.06);
+  transition: transform 0.05s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .btn:hover {
   background: #00000006;
-  border-color: #00000014;
+  box-shadow: 0 10px 22px rgba(0,0,0,0.08);
 }
 
-.btn:active {
-  transform: translateY(1px);
-}
+.btn:active { transform: translateY(1px); }
 
 .btn.primary {
   background: var(--primary);
-  border-color: var(--primary);
   color: #fff;
 }
 
-.btn.primary:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
-}
+.btn.primary:hover { background: var(--primary-hover); }
 
 .btn.link {
   border: none;
@@ -183,15 +261,24 @@ input:focus, textarea:focus, select:focus {
   padding: 8px 0;
   text-decoration: underline;
   color: var(--text);
-  font-weight: 700;
+  font-weight: 800;
+  box-shadow: none;
+}
+
+.btn.small {
+  padding: 10px 12px;
+  border-radius: 12px;
 }
 
 .btn[disabled] {
   opacity: 0.55;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
-/* ===== Offline banner ===== */
+/* =========================
+   OFFLINE BANNER
+========================= */
 .offline-banner {
   background: #111827;
   color: #fff;
@@ -199,29 +286,37 @@ input:focus, textarea:focus, select:focus {
   font-size: 14px;
 }
 
-/* ===== Pre blocks ===== */
+/* =========================
+   PRE / CODE
+========================= */
 .pre, pre {
   white-space: pre-wrap;
   word-break: break-word;
   background: #00000006;
-  border: 1px solid #00000010;
+  border: 0;
   border-radius: 12px;
   padding: 12px;
   overflow: auto;
+  box-shadow: 0 0 0 1px #00000010;
 }
 
-/* ===== Kamera / Canvas ===== */
+/* =========================
+   KAMERA / CANVAS
+========================= */
 .video, .canvas {
   width: 100%;
   max-width: 560px;
   display: block;
   margin-top: 12px;
   border-radius: 14px;
-  border: 1px solid var(--border);
+  border: 0;
   background: #00000006;
+  box-shadow: 0 0 0 1px #00000010;
 }
 
-/* ===== Spinner (loader) ===== */
+/* =========================
+   SPINNER
+========================= */
 .spinner {
   width: 22px;
   height: 22px;
@@ -230,25 +325,11 @@ input:focus, textarea:focus, select:focus {
   border-top-color: var(--primary);
   animation: spin 0.9s linear infinite;
 }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* ===== Responsywność ===== */
-@media (max-width: 480px) {
-  .container { padding: 12px; }
-  .card { padding: 14px; }
-  .btn { width: 100%; justify-content: center; }
-  .nav { gap: 6px; }
-}
-/* ===== App shell (po zalogowaniu) ===== */
-.shell {
-  max-width: 920px;
-  margin: 0 auto;
-  padding: 16px;
-}
-
+/* =========================
+   APP HEADER / TABS
+========================= */
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -281,87 +362,55 @@ input:focus, textarea:focus, select:focus {
   gap: 8px;
   padding: 10px 12px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 0;
   background: #fff;
   text-decoration: none;
   color: var(--text);
-  font-weight: 800;
+  font-weight: 900;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.06);
 }
 
 .tab:hover { background: #00000006; }
 
 .tab.active {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 4px var(--focus);
+  box-shadow: 0 0 0 1px var(--primary), 0 0 0 4px var(--focus);
 }
 
-.shell-content { display: grid; gap: 12px; }
-
-.card.soft {
-  box-shadow: none;
-  background: #00000005;
-  border: 1px solid #00000010;
-}
-
+/* =========================
+   GRID
+========================= */
 .grid-2 {
   display: grid;
   gap: 12px;
   grid-template-columns: 1fr 1fr;
 }
-
 @media (max-width: 720px) {
   .grid-2 { grid-template-columns: 1fr; }
 }
 
-.btn.small {
-  padding: 10px 12px;
-  border-radius: 12px;
+/* =========================
+   PROFIL (karta user + przycisk po prawej)
+   W HTML opakuj:
+   <div class="profile-actions">
+     <div class="card profile-card">...</div>
+     <button class="btn primary new-entry-btn">Nowy wpis</button>
+   </div>
+========================= */
+.profile-actions{
+  display:flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
-.entries { display: grid; gap: 10px; }
+.profile-card{ flex: 1; }
 
-.entry {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 12px;
+.new-entry-btn{
+  white-space: nowrap;
+  align-self: center;
 }
 
-.entry-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 6px;
-}
-
-.entry-date { font-weight: 900; }
-
-.mood-pill {
-  background: #fff;
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-weight: 800;
-}
-
-.entry-desc { color: var(--text); }
-
-.quote {
-  font-size: 20px;
-  font-weight: 900;
-  margin: 10px 0 12px 0;
-}
-
-.entry-photo {
-  width: 100%;
-  max-height: 240px;
-  object-fit: cover;
-  border-radius: 14px;
-  border: 1px solid var(--border);
-  margin-top: 10px;
-}
-
+/* Profil - avatar */
 .profile-row{
   display:flex;
   gap:12px;
@@ -373,11 +422,12 @@ input:focus, textarea:focus, select:focus {
   height:56px;
   border-radius:16px;
   overflow:hidden;
-  border:1px solid var(--border);
+  border: 0;
   background:#fff;
   display:flex;
   align-items:center;
   justify-content:center;
+  box-shadow: 0 0 0 1px #00000010;
 }
 
 .avatar img{
@@ -386,59 +436,253 @@ input:focus, textarea:focus, select:focus {
   object-fit:cover;
 }
 
-.avatar-fallback{
-  font-size:24px;
-}
+.avatar-fallback{ font-size:24px; }
 
 .hello{
   font-size:18px;
   font-weight:900;
 }
 
-.file-label input{
-  display:none;
-}
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: #fff;
-  border-bottom: 1px solid var(--border);
-}
+.file-label input{ display:none; }
 
-.topbar-inner {
+/* =========================
+   HISTORIA: FILTRY DAT
+========================= */
+#dateFrom, #dateTo { min-width: 160px; }
+
+/* =========================
+   ENTRIES / FEED (START) – kompaktowe, bez szarych ramek
+========================= */
+.entries{
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  padding: 12px 20px;
+  gap: 12px;
+  grid-template-columns: 1fr;
+  max-width: 620px;   /* nie rozciąga kart na cały ekran */
+  margin: 0 auto;
 }
 
-.topbar-center {
-  text-align: center;
+.entry,
+.entry--feed{
+  background: var(--surface);
+  border: 0;                      /* bez borderów */
+  border-radius: 16px;
+  padding: 12px;
+  box-shadow: 0 8px 22px rgba(0,0,0,0.08); /* cień zamiast ramki */
 }
 
-.brand {
-  font-size: 22px;
+/* Nagłówek wpisu */
+.entry-head,
+.entry-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.entry-date{ font-weight: 900; }
+
+/* Ikonki (kosz) */
+.icon-btn{
+  border:0;
+  background:transparent;
+  font-size:18px;
+  cursor:pointer;
+  padding:6px;
+  border-radius:10px;
+}
+.icon-btn:hover{ background:#0001; }
+
+/* Metryki */
+.entry-metrics{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin: 6px 0 8px 0;
+}
+
+.pill,
+.mood-pill{
+  display:inline-flex;
+  gap:6px;
+  align-items:center;
+  padding:6px 10px;
+  border-radius:999px;
+  background:#f3f4f6;
+  border: 0;
+  box-shadow: 0 0 0 1px #00000010;
+  font-size:12px;
+  font-weight:800;
+}
+
+.entry-desc{
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+/* Zdjęcie wpisu – bez szarej podkładki */
+.entry-media,
+.entry-photo-wrap{
+  width:100%;
+  border-radius:16px;
+  overflow:hidden;
+
+  background: transparent; /* usuwa szarą “ramkę” pod zdjęciem */
+  line-height: 0;          /* usuwa szczelinę pod img */
+
+  margin: 0 0 10px 0;
+
+  aspect-ratio: 16 / 10; /* kompakt */
+  max-height: 360px;     /* sufit */
+}
+
+.entry-photo{
+  width:100%;
+  height:100%;
+  display:block;
+  object-fit:cover;
+
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  max-height: none;
+}
+
+/* Cytat (jeśli używasz) */
+.quote {
+  font-size: 20px;
   font-weight: 900;
-  letter-spacing: 0.3px;
+  margin: 10px 0 12px 0;
 }
 
-.topbar-right {
+/* =========================
+   RESPONSYWNOŚĆ
+========================= */
+@media (max-width: 720px){
+  .profile-actions{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .new-entry-btn{ width: 100%; }
+}
+
+@media (max-width: 480px) {
+  .container { padding: 12px; }
+  .shell { padding: 12px; }
+
+  .card { padding: 14px; }
+  .btn { width: 100%; justify-content: center; }
+
+  .guest-nav { gap: 10px; }
+
+  .entries{ max-width: 100%; }
+
+  .entry-media,
+  .entry-photo-wrap{
+    aspect-ratio: 4 / 3;
+    max-height: 320px;
+  }
+}
+.profile-welcome{
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.profile-welcome .profile-row{
+  display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.guest-nav {
-  display: flex;
-  gap: 14px;
+.profile-welcome .new-entry-btn{
+  white-space: nowrap;
+}
+/* =========================
+   HISTORIA – toolbar
+========================= */
+
+.history-toolbar{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title actions"
+    "filters filters";
+  gap: 12px;
+  align-items: center;
 }
 
-.logout-btn {
-  background: transparent;
-  border: 1px solid var(--border);
-  padding: 6px 12px;
-  border-radius: 10px;
-  font-weight: 600;
+.history-title{ grid-area: title; }
+.history-actions{ grid-area: actions; justify-self: end; }
+.history-filters{ grid-area: filters; }
+
+.history-title h2{
+  margin: 0;
+  font-size: 26px;
+  font-weight: 900;
+}
+
+/* Filtry w jednej linii, równe wysokości */
+.history-filters{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+/* Pole: label + input */
+.history-filters .field{
+  display: grid;
+  gap: 6px;
+}
+
+.history-filters label{
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+/* Unifikacja wysokości inputów i przycisków */
+.history-filters input,
+.history-filters .btn{
+  height: 44px;
+}
+
+/* Input – lżejszy, bez obwódki (u Ciebie jest hairline) */
+.history-filters input{
+  min-width: 180px;
+  padding: 0 12px;
+  border-radius: 14px;
+}
+
+/* Przyciski obok inputów */
+.history-filters .btn{
+  padding: 0 14px;
+  border-radius: 14px;
+}
+
+/* CTA po prawej: niech nie "pływa" */
+.history-actions .btn{
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 14px;
+  white-space: nowrap;
+}
+
+/* Mobile – CTA pod tytułem, filtry pełna szerokość */
+@media (max-width: 720px){
+  .history-toolbar{
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "title"
+      "actions"
+      "filters";
+  }
+  .history-actions{ justify-self: start; }
+  .history-actions .btn{ width: 100%; }
+  .history-filters input{ min-width: 100%; }
 }
