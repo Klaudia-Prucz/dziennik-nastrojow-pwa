@@ -114,6 +114,18 @@ function setHeaderForAuth(isLoggedIn) {
   }
 }
 
+// --- Rejestracja Service Workera ---
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+      console.log("SW registered:", reg.scope);
+    } catch (e) {
+      console.error("SW register failed:", e);
+    }
+  });
+}
+
 main().catch((e) => {
   console.error(e);
   root.innerHTML = `<section class="card"><h2>Błąd</h2><pre class="pre">${String(e?.stack || e)}</pre></section>`;
