@@ -495,44 +495,102 @@ export async function viewHome() {
               : `<div class="avatar-fallback" style="width:100%;height:100%;display:grid;place-items:center;background:#f2f4f7;">🙂</div>`
           }
         </div>
-        <div class="hello" style="font-size:16px;">
-          Witaj, <strong>${escapeHtml(firstName)}</strong>!
+
+        <div style="flex:1;min-width:0;">
+          <div class="hello" style="font-size:16px;">
+            Witaj, <strong>${escapeHtml(firstName)}</strong>!
+          </div>
+
+          <!-- Pogoda w tej samej ramce -->
+          <div class="row" style="justify-content:space-between;align-items:center;margin-top:6px;gap:10px;">
+            <div class="muted" id="weatherOut" style="display:flex;align-items:center;gap:8px;min-width:0;">
+              <span id="weatherIcon" aria-hidden="true">⛅</span>
+              <span id="weatherText" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Ładowanie…</span>
+            </div>
+            <button class="btn small" id="weatherRefresh" type="button">Odśwież</button>
+          </div>
+
+          <div class="muted" style="font-size:12px;margin-top:6px;">
+            Geolokalizacja + cache 30 min.
+          </div>
         </div>
       </div>
-      <button class="btn primary new-entry-btn">Nowy wpis</button>
     </div>
   `;
-  // Obsługa przycisku Nowy wpis pod profilem
-  root.addEventListener("click", (e) => {
-    const btn = e.target.closest(".new-entry-btn");
-    if (btn) navigate("/(tabs)/new");
-  });
 
-  const weatherCard = `
-    <section class="card soft">
-      <div class="row" style="justify-content:space-between;align-items:center;">
-        <h2 style="margin:0;">Pogoda</h2>
-        <button class="btn" id="weatherRefresh">Odśwież</button>
-      </div>
-      <p class="muted" id="weatherOut">Ładowanie…</p>
-      <p class="muted" style="font-size:12px;margin-top:8px;">
-        Wykorzystuje geolokalizację urządzenia (native) + cache 30 min.
-      </p>
-    </section>
-  `;
+
 
   let entries = [];
   let loadError = "";
-
   try {
-    entries = await fetchEntries(7);
+    entries = await fetchEntries(30); // żeby mieć dużą szansę złapać "dziś"
   } catch (e) {
     loadError = e?.message || String(e);
     entries = [];
   }
 
+
   const hasEntries = entries.length > 0;
 
+  // --- Karta DZIŚ ---
+  const today = todayISO();
+  const todayEntry = entries.find((e) => String(e.data_wpisu) === String(today));
+
+  const todayCard = (() => {
+    if (!todayEntry) {
+      return `
+        <section class="card soft today-card">
+          <div class="today-head">
+            <div class="today-badge"><span class="today-dot"></span> DZIŚ</div>
+            <div class="muted" style="font-size:12px;">${escapeHtml(today)}</div>
+          </div>
+
+          <p class="muted" style="margin-top:10px;">
+            Nie dodałaś jeszcze dziś wpisu.
+          </p>
+
+          <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:10px;">
+            <button class="btn primary" id="goNewToday">Dodaj wpis</button>
+          </div>
+        </section>
+      `;
+    }
+
+    const photoUrl = getPhotoUrl(todayEntry.photo_path);
+
+    return `
+      <section class="card soft today-card">
+        <div class="today-head">
+          <div class="today-badge"><span class="today-dot"></span> DZIŚ</div>
+          <div class="muted" style="font-size:12px;">${escapeHtml(todayEntry.data_wpisu)}</div>
+        </div>
+
+        ${photoUrl ? `
+          <div class="entry-media" style="margin-top:10px;">
+            <img class="entry-photo"
+                 src="${escapeHtml(photoUrl)}"
+                 alt="Zdjęcie wpisu"
+                 loading="lazy">
+          </div>
+        ` : ""}
+
+        <div class="entry-metrics" style="margin-top:10px;">
+          <span class="pill">Nastrój: <strong>${escapeHtml(todayEntry.nastroj ?? "—")}</strong></span>
+          <span class="pill">Energia: <strong>${escapeHtml(todayEntry.energia ?? "—")}</strong></span>
+          <span class="pill">Stres: <strong>${escapeHtml(todayEntry.stres ?? "—")}</strong></span>
+        </div>
+
+        ${todayEntry.opis ? `<div class="entry-desc" style="margin-top:10px;">${escapeHtml(todayEntry.opis)}</div>` : ""}
+
+        <div class="row" style="gap:10px;flex-wrap:wrap;margin-top:12px;">
+          <button class="btn" id="goHistoryToday">Zobacz w historii</button>
+          <button class="btn primary" id="goNewToday">Dodaj kolejny wpis</button>
+        </div>
+      </section>
+    `;
+  })();
+
+  // --- Ostatnie wpisy (max 7) ---
   const lastEntriesHtml = `
     <section class="card soft">
       <div class="row" style="justify-content:space-between;align-items:center;">
@@ -549,7 +607,7 @@ export async function viewHome() {
           `
           : `
             <div class="entries" id="homeEntries">
-              ${entries
+              ${entries.slice(0, 7)
                 .map((w) => {
                   const photoUrl = getPhotoUrl(w.photo_path);
                   return `
@@ -585,13 +643,18 @@ export async function viewHome() {
     </section>
   `;
 
-  const summaryHtml = helloCard + weatherCard + lastEntriesHtml;
+  const summaryHtml = helloCard + todayCard + lastEntriesHtml;
+
 
   await renderShell({
     title: "Start",
     active: "home",
     contentHtml: summaryHtml,
   });
+
+  // --- eventy Home (po renderShell!) ---
+  root.querySelector("#goNewToday")?.addEventListener("click", () => navigate("/(tabs)/new"));
+  root.querySelector("#goHistoryToday")?.addEventListener("click", () => navigate("/(tabs)/history"));
 
   // --- eventy Home (po renderShell!) ---
   root.querySelector("#goNewTop")?.addEventListener("click", () => navigate("/(tabs)/new"));
@@ -623,10 +686,16 @@ export async function viewHome() {
 
   async function paintWeather() {
     const out = root.querySelector("#weatherOut");
-    if (!out) return;
-    out.textContent = "Ładowanie…";
+    const iconEl = root.querySelector("#weatherIcon");
+    const textEl = root.querySelector("#weatherText");
+    if (!out || !iconEl || !textEl) return;
+
+    textEl.textContent = "Ładowanie…";
+    iconEl.textContent = "⛅";
+
     const result = await getWeatherText();
-    out.textContent = result.text + (result.fromCache ? " (cache)" : "");
+    textEl.textContent = result.text + (result.fromCache ? " (cache)" : "");
+    iconEl.textContent = result.icon || "🌡️";
   }
 
   root.querySelector("#weatherRefresh")?.addEventListener("click", () => {
@@ -1254,14 +1323,45 @@ export async function view404() {
 /* =========================
    Weather
 ========================= */
+
+// --- Ikony pogody (WMO → emoji) ---
+function weatherIcon(code, isDay = true) {
+  const day = !!isDay;
+
+  // WMO weather codes (Open-Meteo używa standardu WMO)
+  if (code === 0) return day ? "☀️" : "🌙";                // clear
+  if (code === 1) return day ? "🌤️" : "🌙";               // mainly clear
+  if (code === 2) return "⛅";                              // partly cloudy
+  if (code === 3) return "☁️";                              // overcast
+
+  if (code === 45 || code === 48) return "🌫️";            // fog
+
+  if (code === 51 || code === 53 || code === 55) return "🌦️"; // drizzle
+  if (code === 56 || code === 57) return "🌧️";            // freezing drizzle
+
+  if (code === 61 || code === 63 || code === 65) return "🌧️"; // rain
+  if (code === 66 || code === 67) return "🌧️";            // freezing rain
+
+  if (code === 71 || code === 73 || code === 75) return "🌨️"; // snow
+  if (code === 77) return "🌨️";                            // snow grains
+
+  if (code === 80 || code === 81 || code === 82) return "🌧️"; // rain showers
+  if (code === 85 || code === 86) return "🌨️";            // snow showers
+
+  if (code === 95) return "⛈️";                             // thunderstorm
+  if (code === 96 || code === 99) return "⛈️";             // thunderstorm + hail
+
+  return "🌡️"; // fallback
+}
+
 async function getWeatherText() {
   const cached = cacheGet("weather_cache", null);
   if (cached?.text && Date.now() - cached.ts < 30 * 60 * 1000) {
-    return { text: cached.text, fromCache: true };
+    return { text: cached.text, icon: cached.icon, code: cached.code, isDay: cached.isDay, fromCache: true };
   }
 
   if (!navigator.onLine) {
-    if (cached?.text) return { text: cached.text, fromCache: true };
+    if (cached?.text) return { text: cached.text, icon: cached.icon, code: cached.code, isDay: cached.isDay, fromCache: true };
     return { text: "Offline: brak danych o pogodzie.", fromCache: true };
   }
 
@@ -1286,19 +1386,22 @@ async function getWeatherText() {
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${encodeURIComponent(latitude)}` +
     `&longitude=${encodeURIComponent(longitude)}` +
-    `&current=temperature_2m&timezone=auto`;
+    `&current=temperature_2m,weather_code,is_day&timezone=auto`;
 
   const weatherRes = await fetch(weatherUrl);
   if (!weatherRes.ok) return { text: "Błąd pobierania pogody.", fromCache: false };
 
   const weatherData = await weatherRes.json();
   const temp = weatherData?.current?.temperature_2m;
+  const code = weatherData?.current?.weather_code;
+  const isDay = weatherData?.current?.is_day === 1;
 
   const city = guessCityFromTimezone();
+  const icon = weatherIcon(code, isDay);
   const text = `${city}: ${temp ?? "—"}°C`;
 
-  cacheSet("weather_cache", { ts: Date.now(), text });
-  return { text, fromCache: false };
+  cacheSet("weather_cache", { ts: Date.now(), text, icon, code, isDay });
+  return { text, icon, code, isDay, fromCache: false };
 }
 
 function guessCityFromTimezone() {

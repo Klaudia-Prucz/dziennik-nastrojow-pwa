@@ -686,3 +686,34 @@ input:focus, textarea:focus, select:focus {
   .history-actions .btn{ width: 100%; }
   .history-filters input{ min-width: 100%; }
 }
+/* ===== Card: DZIŚ ===== */
+:root{
+  --accent-orange: #ff8a00;
+  --accent-orange-soft: rgba(255, 138, 0, 0.12);
+}
+
+.card.today-card{
+  border: 2px solid var(--accent-orange);
+  background: linear-gradient(180deg, var(--accent-orange-soft), transparent 55%);
+}
+
+.today-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.today-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  font-weight:700;
+  letter-spacing:0.2px;
+}
+
+.today-dot{
+  width:10px;height:10px;border-radius:50%;
+  background: var(--accent-orange);
+  box-shadow: 0 0 0 4px var(--accent-orange-soft);
+}
