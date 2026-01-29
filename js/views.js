@@ -127,7 +127,7 @@ export async function requireAuth() {
 const root = document.getElementById("app");
 
 // --- VAPID public key (testowy, docelowo z Edge Function) ---
-const VAPID_PUBLIC_KEY = "BHWtU9RmAih2768GX3-l0IO3sX28rvdRT7jk0y50X1Jnufgms9vx-WnLwGczHnNoilwJKnnYMQF-9qku1KlHip0";
+const VAPID_PUBLIC_KEY = "BP0kz7vkwdiIQ_uygSK2SIcA_nEoDoXFuwKlnXrszPyHLYQRjfCHZVQdbIiGxUhDwaxlvY8yc1ss3miaUzMeDUc";
 
 // --- Web Push: enable ---
 async function enableWebPush() {
