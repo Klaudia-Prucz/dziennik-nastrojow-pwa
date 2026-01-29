@@ -1,40 +1,66 @@
+export {
+  viewIndex,
+  viewLogowanie,
+  viewRejestracja,
+  viewOffline,
+  view404,
+  viewHome,
+  viewNewEntry,
+  viewHistory,
+  viewAdvice
+};
 // --- Interpretation for advice ---
-function interpret(score, entries) {
-  if (!score || !entries || !entries.length) return { level: "Brak danych", msg: "Brak wystarczających danych do analizy." };
-  const avgStress = entries.reduce((s, e) => s + (e.stres ?? e.stress), 0) / entries.length;
-  const avgEnergy = entries.reduce((s, e) => s + (e.energia ?? e.energy), 0) / entries.length;
-  const avgMood = entries.reduce((s, e) => s + (e.nastroj ?? e.mood), 0) / entries.length;
-  const percent = Math.round(score.avg * 100);
-
-  if (percent >= 70 && avgStress < 5) {
+function interpret(entries, scoreAvg) {
+  if (!entries?.length || typeof scoreAvg !== "number") {
     return {
-      level: "Super",
-      msg: "Masz stabilny, dobry okres. Warto tylko pilnować regeneracji.",
+      level: "Brak danych",
+      msg: "Brak wystarczających danych do analizy."
     };
   }
+
+  const avgStress =
+    entries.reduce((s, e) => s + (e.stres ?? e.stress ?? 0), 0) / entries.length;
+
+  const avgEnergy =
+    entries.reduce((s, e) => s + (e.energia ?? e.energy ?? 0), 0) / entries.length;
+
+  const avgMood =
+    entries.reduce((s, e) => s + (e.nastroj ?? e.mood ?? 0), 0) / entries.length;
+
   if (avgStress >= 7) {
     return {
       level: "Przeciążenie",
-      msg: "Stres jest wysoki i to on najbardziej obniża Twój dobrostan. Priorytet: obniżenie napięcia, nie zwiększanie produktywności.",
+      msg: "Stres jest wysoki i to on najbardziej obniża Twój dobrostan. Priorytet: obniżenie napięcia."
     };
   }
+
   if (avgEnergy <= 4) {
     return {
       level: "Niskie zasoby",
-      msg: "Problemem nie jest motywacja, tylko brak energii. Skup się na odpoczynku i podstawach.",
+      msg: "Problemem nie jest motywacja, tylko brak energii. Skup się na odpoczynku."
     };
   }
-  if (percent < 40) {
+
+  if (scoreAvg < 4) {
     return {
       level: "Trudniejszy czas",
-      msg: "Ostatnio masz trudniejszy czas. Pamiętaj, że możesz poprosić o wsparcie.",
+      msg: "Ostatnio masz trudniejszy czas. Pamiętaj, że możesz poprosić o wsparcie."
     };
   }
+
+  if (scoreAvg >= 7.5 && avgStress < 5) {
+    return {
+      level: "Super",
+      msg: "Masz stabilny, dobry okres. Warto tylko pilnować regeneracji."
+    };
+  }
+
   return {
     level: "Średnio",
-    msg: "Jest w miarę OK, ale widać obszar do poprawy. Małe korekty wystarczą.",
+    msg: "Jest w miarę OK, ale widać obszar do drobnych korekt."
   };
 }
+
 // --- Aggregation for last 7 days ---
 function score7Days(entries) {
   const last = entries.slice(0, 7); // pobieramy najnowsze 7, bo sort DESC
@@ -64,7 +90,7 @@ function score7Days(entries) {
     daily,
   };
 }
-// --- Wellbeing normalization and scoring model ---
+
 function normPos(v, min = 1, max = 10) {
   return Math.min(1, Math.max(0, (v - min) / (max - min)));
 }
@@ -76,16 +102,16 @@ function normNeg(v, min = 1, max = 10) {
 function wellbeingScore({ mood, energy, stress }) {
   const m = normPos(mood);
   const e = normPos(energy);
-  const s = normNeg(stress); // reversed stress
+  const s = normNeg(stress); // odwrócony stres
 
-  // weighted base score
+
   let score = (0.35 * m) + (0.35 * e) + (0.30 * s);
 
-  // Penalty: high stress always drags down
+
   if (stress >= 8) score -= 0.15;
   if (stress >= 9) score -= 0.25;
 
-  // Penalty: very low energy
+
   if (energy <= 3) score -= 0.1;
 
   return Math.max(0, Math.min(1, score)); // clamp 0..1
@@ -95,7 +121,6 @@ import { supabase } from "./supabaseClient.js";
 import { navigate } from "./router.js";
 import { cacheGet, cacheSet } from "./offline.js";
 
-// --- Helper: bezpieczne wstawianie tekstu do HTML ---
 
 // --- Helper: data dzisiaj w formacie YYYY-MM-DD (lokalna) ---
 function todayISO() {
@@ -117,7 +142,7 @@ function escapeHtml(str) {
 }
 
 // --- Helper: wymagaj autoryzacji, zwraca user lub przekierowuje do logowania ---
-export async function requireAuth() {
+async function requireAuth() {
   const { data } = await supabase.auth.getSession();
   if (data?.session?.user) return data.session.user;
   navigate("/logowanie");
@@ -126,10 +151,9 @@ export async function requireAuth() {
 
 const root = document.getElementById("app");
 
-// --- VAPID public key (testowy, docelowo z Edge Function) ---
 const VAPID_PUBLIC_KEY = "BP0kz7vkwdiIQ_uygSK2SIcA_nEoDoXFuwKlnXrszPyHLYQRjfCHZVQdbIiGxUhDwaxlvY8yc1ss3miaUzMeDUc";
 
-// --- Web Push: enable ---
+// --- Web Push: enable --- nie działa
 async function enableWebPush() {
   if (!("Notification" in window)) throw new Error("Brak Notification API.");
   if (!("serviceWorker" in navigator)) throw new Error("Brak Service Worker.");
@@ -172,7 +196,7 @@ async function enableWebPush() {
       },
       { onConflict: "endpoint" }
     );
-
+  
   if (error) throw error;
 
   return true;
@@ -423,7 +447,7 @@ function appLogoImg() {
 /* =========================
   Views
 ========================= */
-export async function viewIndex() {
+async function viewIndex() {
   const { data } = await supabase.auth.getSession();
   if (data?.session?.user) {
     navigate("/(tabs)/home");
@@ -445,7 +469,7 @@ export async function viewIndex() {
   root.querySelector("#goRegister").addEventListener("click", () => navigate("/rejestracja"));
 }
 
-export async function viewLogowanie() {
+async function viewLogowanie() {
   root.innerHTML = `
     <section class="card" style="max-width:400px;margin:40px auto 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100dvh - 80px);box-shadow:none;background:none;">
       ${appLogoImg()}
@@ -489,7 +513,7 @@ export async function viewLogowanie() {
   });
 }
 
-export async function viewRejestracja() {
+async function viewRejestracja() {
   root.innerHTML = `
     <section class="card" style="max-width:400px;margin:40px auto 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100dvh - 80px);box-shadow:none;background:none;">
       ${appLogoImg()}
@@ -548,7 +572,7 @@ export async function viewRejestracja() {
 }
 
 /** Start: podsumowanie + ostatnie wpisy */
-export async function viewHome() {
+async function viewHome() {
   const user = await requireAuth();
   if (!user) return;
 
@@ -595,7 +619,7 @@ export async function viewHome() {
           </div>
 
           <div class="muted" style="font-size:12px;margin-top:6px;">
-            Geolokalizacja + cache 30 min.
+
           </div>
 
           <div class="row" style="margin-top:10px;gap:10px;">
@@ -806,7 +830,7 @@ export async function viewHome() {
 }
 
 /** Nowy wpis: formularz */
-export async function viewNewEntry() {
+async function viewNewEntry() {
   const user = await requireAuth();
   if (!user) return;
 
@@ -1113,7 +1137,7 @@ export async function viewNewEntry() {
         photo_path = path;
       }
 
-      // ✅ KLUCZOWA POPRAWKA: zapisujemy energia i stres do bazy
+
       await insertEntry({ data_wpisu, nastroj, energia, stres, opis, photo_path });
 
       navigate("/(tabs)/home");
@@ -1127,7 +1151,7 @@ export async function viewNewEntry() {
 /** Historia: lista + filtrowanie po dacie + ed**
 
 /** Historia: lista + filtrowanie po dacie + edycja + usuwanie */
-export async function viewHistory() {
+async function viewHistory() {
   const user = await requireAuth();
   if (!user) return;
 
@@ -1301,7 +1325,7 @@ export async function viewHistory() {
       }
 
       if (action === "edit") {
-        // szybka edycja: prompt (działa natychmiast). Jak chcesz modal — zrobię.
+
         const newDate = prompt("Data (YYYY-MM-DD):", entry.data_wpisu) || entry.data_wpisu;
         const newMoodStr = prompt("Nastrój (1-10):", String(entry.nastroj)) || String(entry.nastroj);
         const newDesc = prompt("Opis:", entry.opis || "") ?? (entry.opis || "");
@@ -1338,7 +1362,7 @@ export async function viewHistory() {
 }
 
 /** Rada */
-export async function viewAdvice() {
+async function viewAdvice() {
   const user = await requireAuth();
   if (!user) return;
 
@@ -1396,7 +1420,7 @@ export async function viewAdvice() {
 /* =========================
   OFFLINE / 404
 ========================= */
-export async function viewOffline() {
+async function viewOffline() {
   const key = await cacheKeyEntries();
   const cachedEntries = cacheGet(key, []);
   root.innerHTML = `
@@ -1415,7 +1439,7 @@ export async function viewOffline() {
   root.querySelector("#back").addEventListener("click", () => navigate("/"));
 }
 
-export async function view404() {
+async function view404() {
   root.innerHTML = `<section class="card"><h1>404</h1><p>Nie znaleziono widoku.</p></section>`;
 }
 
@@ -1513,4 +1537,4 @@ function guessCityFromTimezone() {
   }
 }
 
-export { renderShell };
+
