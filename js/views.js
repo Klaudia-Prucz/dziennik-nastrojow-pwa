@@ -37,7 +37,7 @@ function interpret(score, entries) {
 }
 // --- Aggregation for last 7 days ---
 function score7Days(entries) {
-  const last = entries.slice(-7);
+  const last = entries.slice(0, 7); // pobieramy najnowsze 7, bo sort DESC
   if (!last.length) return null;
   // Only use entries with all 3 valid numbers
   const valid = last.filter(e => {
@@ -95,37 +95,118 @@ import { supabase } from "./supabaseClient.js";
 import { navigate } from "./router.js";
 import { cacheGet, cacheSet } from "./offline.js";
 
+// --- Helper: bezpieczne wstawianie tekstu do HTML ---
+
+// --- Helper: data dzisiaj w formacie YYYY-MM-DD (lokalna) ---
+function todayISO() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function escapeHtml(str) {
+  if (typeof str !== "string") str = String(str ?? "");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// --- Helper: wymagaj autoryzacji, zwraca user lub przekierowuje do logowania ---
+export async function requireAuth() {
+  const { data } = await supabase.auth.getSession();
+  if (data?.session?.user) return data.session.user;
+  navigate("/logowanie");
+  return null;
+}
+
 const root = document.getElementById("app");
 
-/* =========================
-   Utils
-========================= */
-function escapeHtml(s) {
-  return String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+// --- VAPID public key (testowy, docelowo z Edge Function) ---
+const VAPID_PUBLIC_KEY = "BHWtU9RmAih2768GX3-l0IO3sX28rvdRT7jk0y50X1Jnufgms9vx-WnLwGczHnNoilwJKnnYMQF-9qku1KlHip0";
+
+// --- Web Push: enable ---
+async function enableWebPush() {
+  if (!("Notification" in window)) throw new Error("Brak Notification API.");
+  if (!("serviceWorker" in navigator)) throw new Error("Brak Service Worker.");
+
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") throw new Error("Brak zgody na powiadomienia.");
+
+  const reg = await navigator.serviceWorker.ready;
+
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+  });
+
+  const json = sub.toJSON();
+  const endpoint = json.endpoint;
+  const p256dh = json.keys?.p256dh;
+  const auth = json.keys?.auth;
+
+  if (!endpoint || !p256dh || !auth) throw new Error("Niepełna subskrypcja push.");
+
+  const ua = navigator.userAgent;
+
+  // UPSERT po endpoint (żeby nie dublować)
+  const { data: u } = await supabase.auth.getUser();
+  const userId = u?.user?.id;
+  if (!userId) throw new Error("Brak usera.");
+
+  const { error } = await supabase
+    .from("push_subscriptions")
+    .upsert(
+      {
+        user_id: userId,
+        endpoint,
+        p256dh,
+        auth,
+        user_agent: ua,
+        last_seen_at: new Date().toISOString(),
+        is_active: true,
+      },
+      { onConflict: "endpoint" }
+    );
+
+  if (error) throw error;
+
+  return true;
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+// --- Web Push: disable ---
+async function disableWebPush() {
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return true;
+
+  const endpoint = sub.endpoint;
+  await sub.unsubscribe();
+
+  // oznacz w DB jako nieaktywne
+  const { error } = await supabase
+    .from("push_subscriptions")
+    .update({ is_active: false, last_seen_at: new Date().toISOString() })
+    .eq("endpoint", endpoint);
+
+  if (error) console.warn("DB disable push error:", error.message);
+  return true;
 }
 
-async function requireAuth() {
-  const { data } = await supabase.auth.getSession();
-  const user = data?.session?.user ?? null;
-  if (!user) {
-    navigate("/logowanie");
-    return null;
-  }
-  return user;
-}
 
-/* =========================
-   DB helpers
-========================= */
+// --- Helper do konwersji VAPID public key (Base64URL → Uint8Array) ---
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const out = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) out[i] = rawData.charCodeAt(i);
+  return out;
+}
 
 // Cache klucz per-user (żeby nie mieszać wpisów między kontami)
 async function cacheKeyEntries() {
@@ -133,6 +214,44 @@ async function cacheKeyEntries() {
   const userId = u?.user?.id || "anon";
   return `wpisy_cache_${userId}`;
 }
+
+/* =========================
+   Shell
+========================= */
+async function renderShell({ title, active, contentHtml }) {
+  const { data } = await supabase.auth.getSession();
+  const email = data?.session?.user?.email || cacheGet("lastUserEmail", "");
+
+  root.innerHTML = `
+    <section class="shell">
+      <header class="app-header">
+        <div>
+          <div class="app-title">${escapeHtml(title)}</div>
+          <div class="app-sub">${email ? "Zalogowano: " + escapeHtml(email) : ""}</div>
+        </div>
+        <button class="btn small" id="logout">Wyloguj</button>
+      </header>
+
+      <nav class="tabs">
+        <a href="#/(tabs)/home" class="tab ${active === "home" ? "active" : ""}">Start</a>
+        <a href="#/(tabs)/new" class="tab ${active === "new" ? "active" : ""}">Nowy wpis</a>
+        <a href="#/(tabs)/history" class="tab ${active === "history" ? "active" : ""}">Historia</a>
+        <a href="#/(tabs)/advice" class="tab ${active === "advice" ? "active" : ""}">Rada</a>
+      </nav>
+
+      <main class="shell-content">
+        ${contentHtml}
+      </main>
+    </section>
+  `;
+
+  root.querySelector("#logout")?.addEventListener("click", async () => {
+    await supabase.auth.signOut();
+    navigate("/logowanie");
+  });
+}
+
+
 
 async function fetchEntries(limit = 50) {
   const key = await cacheKeyEntries();
@@ -296,48 +415,13 @@ async function uploadAvatar(file) {
   return path;
 }
 
-/* =========================
-   Shell
-========================= */
-async function renderShell({ title, active, contentHtml }) {
-  const { data } = await supabase.auth.getSession();
-  const email = data?.session?.user?.email || cacheGet("lastUserEmail", "");
-
-  root.innerHTML = `
-    <section class="shell">
-      <header class="app-header">
-        <div>
-          <div class="app-title">${escapeHtml(title)}</div>
-          <div class="app-sub">${email ? "Zalogowano: " + escapeHtml(email) : ""}</div>
-        </div>
-        <button class="btn small" id="logout">Wyloguj</button>
-      </header>
-
-      <nav class="tabs">
-        <a href="#/(tabs)/home" class="tab ${active === "home" ? "active" : ""}">Start</a>
-        <a href="#/(tabs)/new" class="tab ${active === "new" ? "active" : ""}">Nowy wpis</a>
-        <a href="#/(tabs)/history" class="tab ${active === "history" ? "active" : ""}">Historia</a>
-        <a href="#/(tabs)/advice" class="tab ${active === "advice" ? "active" : ""}">Rada</a>
-      </nav>
-
-      <main class="shell-content">
-        ${contentHtml}
-      </main>
-    </section>
-  `;
-
-  root.querySelector("#logout").addEventListener("click", async () => {
-    await supabase.auth.signOut();
-    navigate("/logowanie");
-  });
-}
 
 function appLogoImg() {
   return `<img src="/assets/icon-192.png" alt="Logo" style="width:140px;height:140px;display:block;margin:32px auto 16px auto;box-shadow:0 2px 16px #0002;border-radius:32px;" />`;
 }
 
 /* =========================
-   Views
+  Views
 ========================= */
 export async function viewIndex() {
   const { data } = await supabase.auth.getSession();
@@ -513,6 +597,11 @@ export async function viewHome() {
           <div class="muted" style="font-size:12px;margin-top:6px;">
             Geolokalizacja + cache 30 min.
           </div>
+
+          <div class="row" style="margin-top:10px;gap:10px;">
+            <button class="btn small" id="enablePush" type="button">Włącz powiadomienia</button>
+            <button class="btn small" id="disablePush" type="button">Wyłącz powiadomienia</button>
+          </div>
         </div>
       </div>
     </div>
@@ -655,6 +744,16 @@ export async function viewHome() {
   // --- eventy Home (po renderShell!) ---
   root.querySelector("#goNewToday")?.addEventListener("click", () => navigate("/(tabs)/new"));
   root.querySelector("#goHistoryToday")?.addEventListener("click", () => navigate("/(tabs)/history"));
+
+  // Web Push eventy
+  root.querySelector("#enablePush")?.addEventListener("click", async () => {
+    try { await enableWebPush(); alert("Powiadomienia włączone ✅"); }
+    catch (e) { alert(e?.message || String(e)); }
+  });
+  root.querySelector("#disablePush")?.addEventListener("click", async () => {
+    try { await disableWebPush(); alert("Powiadomienia wyłączone."); }
+    catch (e) { alert(e?.message || String(e)); }
+  });
 
   // --- eventy Home (po renderShell!) ---
   root.querySelector("#goNewTop")?.addEventListener("click", () => navigate("/(tabs)/new"));
@@ -1295,7 +1394,7 @@ export async function viewAdvice() {
 }
 
 /* =========================
-   OFFLINE / 404
+  OFFLINE / 404
 ========================= */
 export async function viewOffline() {
   const key = await cacheKeyEntries();
@@ -1321,7 +1420,7 @@ export async function view404() {
 }
 
 /* =========================
-   Weather
+  Weather
 ========================= */
 
 // --- Ikony pogody (WMO → emoji) ---
@@ -1413,3 +1512,5 @@ function guessCityFromTimezone() {
     return "Twoja okolica";
   }
 }
+
+export { renderShell };
