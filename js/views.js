@@ -836,7 +836,7 @@ async function viewHome() {
     iconEl.textContent = "⛅";
 
     const result = await getWeatherText();
-    textEl.textContent = result.text + (result.fromCache ? " (cache)" : "");
+    textEl.textContent = result.text + (result.fromCache ? "" : "");
     iconEl.textContent = result.icon || "🌡️";
   }
 
