@@ -1,3 +1,7 @@
+import { supabase } from "./supabaseClient.js";
+import { navigate } from "./router.js";
+import { cacheGet, cacheSet } from "./offline.js";
+
 export {
   viewIndex,
   viewLogowanie,
@@ -9,7 +13,7 @@ export {
   viewHistory,
   viewAdvice
 };
-// --- Interpretation for advice ---
+// interpretacja do rady na podstawie średniej z ostatnich wpisów i średniej z 3 parametrów
 function interpret(entries, scoreAvg) {
   if (!entries?.length || typeof scoreAvg !== "number") {
     return {
@@ -61,11 +65,11 @@ function interpret(entries, scoreAvg) {
   };
 }
 
-// --- Aggregation for last 7 days ---
+// podsumowanie 7 dni
 function score7Days(entries) {
   const last = entries.slice(0, 7); // pobieramy najnowsze 7, bo sort DESC
   if (!last.length) return null;
-  // Only use entries with all 3 valid numbers
+
   const valid = last.filter(e => {
     const mood = e.nastroj ?? e.mood;
     const energy = e.energia ?? e.energy;
@@ -116,11 +120,6 @@ function wellbeingScore({ mood, energy, stress }) {
 
   return Math.max(0, Math.min(1, score)); // clamp 0..1
 }
-// views.js
-import { supabase } from "./supabaseClient.js";
-import { navigate } from "./router.js";
-import { cacheGet, cacheSet } from "./offline.js";
-
 
 // --- Helper: data dzisiaj w formacie YYYY-MM-DD (lokalna) ---
 function todayISO() {
@@ -144,7 +143,11 @@ function escapeHtml(str) {
 // --- Helper: wymagaj autoryzacji, zwraca user lub przekierowuje do logowania ---
 async function requireAuth() {
   const { data } = await supabase.auth.getSession();
-  if (data?.session?.user) return data.session.user;
+  const userId = data?.session?.user?.id;
+  if (userId) {
+    cacheSet("lastUserId", userId);
+    return data.session.user;
+  }
   navigate("/logowanie");
   return null;
 }
@@ -153,7 +156,7 @@ const root = document.getElementById("app");
 
 const VAPID_PUBLIC_KEY = "BP0kz7vkwdiIQ_uygSK2SIcA_nEoDoXFuwKlnXrszPyHLYQRjfCHZVQdbIiGxUhDwaxlvY8yc1ss3miaUzMeDUc";
 
-// --- Web Push: enable --- nie działa
+// --- Web Push: --- nie działa
 async function enableWebPush() {
   if (!("Notification" in window)) throw new Error("Brak Notification API.");
   if (!("serviceWorker" in navigator)) throw new Error("Brak Service Worker.");
@@ -202,7 +205,7 @@ async function enableWebPush() {
   return true;
 }
 
-// --- Web Push: disable ---
+// --- Web Push: nie działa
 async function disableWebPush() {
   const reg = await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.getSubscription();
@@ -234,8 +237,15 @@ function urlBase64ToUint8Array(base64String) {
 
 // Cache klucz per-user (żeby nie mieszać wpisów między kontami)
 async function cacheKeyEntries() {
-  const { data: u } = await supabase.auth.getUser();
-  const userId = u?.user?.id || "anon";
+  // Najpierw próbujemy getSession (działa offline jeśli jest local session)
+  const { data } = await supabase.auth.getSession();
+  let userId = data?.session?.user?.id;
+  if (!userId) {
+    // Fallback do cache, jeśli nie ma sesji
+    userId = cacheGet("lastUserId", "anon");
+  } else {
+    cacheSet("lastUserId", userId);
+  }
   return `wpisy_cache_${userId}`;
 }
 
@@ -408,6 +418,8 @@ async function fetchMyProfile() {
     .single();
 
   if (error) throw error;
+  // Zapisz avatar_path do cache jeśli jest
+  if (data?.avatar_path) cacheSet("lastUserAvatar", data.avatar_path);
   return data;
 }
 
@@ -591,7 +603,14 @@ async function viewHome() {
         ? String(metaFirst).trim()
         : "użytkowniku";
 
-  const avatarUrl = getAvatarUrl(profile?.avatar_path);
+  // Avatar: najpierw z profilu, potem z cache
+  let avatarPath = profile?.avatar_path;
+  if (!avatarPath) {
+    avatarPath = cacheGet("lastUserAvatar", null);
+  } else {
+    cacheSet("lastUserAvatar", avatarPath);
+  }
+  const avatarUrl = getAvatarUrl(avatarPath);
 
   const helloCard = `
     <div class="card profile-card profile-welcome">
@@ -769,7 +788,7 @@ async function viewHome() {
   root.querySelector("#goNewToday")?.addEventListener("click", () => navigate("/(tabs)/new"));
   root.querySelector("#goHistoryToday")?.addEventListener("click", () => navigate("/(tabs)/history"));
 
-  // Web Push eventy
+  // Web Push eventy - nie działa, ale zostawiam jako szkic implementacji
   root.querySelector("#enablePush")?.addEventListener("click", async () => {
     try { await enableWebPush(); alert("Powiadomienia włączone ✅"); }
     catch (e) { alert(e?.message || String(e)); }
@@ -1148,8 +1167,6 @@ async function viewNewEntry() {
   });
 }
 
-/** Historia: lista + filtrowanie po dacie + ed**
-
 /** Historia: lista + filtrowanie po dacie + edycja + usuwanie */
 async function viewHistory() {
   const user = await requireAuth();
@@ -1368,7 +1385,6 @@ async function viewAdvice() {
 
 
 
-  // --- New wellbeing model integration ---
   const tips = [
     "Zrób 10-minutowy spacer bez telefonu.",
     "Zapisz 3 rzeczy, za które jesteś wdzięczna.",

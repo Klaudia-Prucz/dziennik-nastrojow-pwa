@@ -1,5 +1,3 @@
-// public/js/offline.js
-
 export function bindOfflineBanner() {
   const banner = document.getElementById("offlineBanner");
   if (!banner) return;
